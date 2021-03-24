@@ -13,6 +13,7 @@ use Piwik\ArchiveProcessor\Rules;
 use Piwik\Common;
 use Piwik\Config;
 use Piwik\Container\StaticContainer;
+use Piwik\CronArchive\ReArchiveList;
 use Piwik\DataAccess\ArchiveTableCreator;
 use Piwik\DataAccess\ArchiveWriter;
 use Piwik\DataAccess\Model;
@@ -27,6 +28,7 @@ use Piwik\Tests\Framework\Fixture;
 use Piwik\Tests\Framework\TestCase\IntegrationTestCase;
 use Piwik\Archive\ArchiveInvalidator;
 use Piwik\Segment;
+use Psr\Log\NullLogger;
 
 /**
  * @group Archiver
@@ -79,7 +81,236 @@ class ArchiveInvalidatorTest extends IntegrationTestCase
     {
         parent::setUp();
 
-        $this->invalidator = new ArchiveInvalidator(new Model(), StaticContainer::get(ArchivingStatus::class));
+        $this->invalidator = new ArchiveInvalidator(new Model(), StaticContainer::get(ArchivingStatus::class), new NullLogger());
+    }
+
+    public function test_reArchiveReport_doesNothingIfIniSettingSetToZero()
+    {
+        Date::$now = strtotime('2020-06-16 12:00:00');
+
+        Config::getInstance()->General['rearchive_reports_in_past_last_n_months'] = 'last0';
+
+        $this->invalidator->reArchiveReport([1], 'VisitsSummary', 'some.Report');
+
+        $expectedInvalidations = [];
+        $actualInvalidations = $this->getInvalidatedArchiveTableEntriesSummary();
+
+        $this->assertEquals($expectedInvalidations, $actualInvalidations);
+
+        // different format
+        Config::getInstance()->General['rearchive_reports_in_past_last_n_months'] = '0';
+
+        $this->invalidator->reArchiveReport([1], 'VisitsSummary', 'some.Report');
+
+        $expectedInvalidations = [];
+        $actualInvalidations = $this->getInvalidatedArchiveTableEntriesSummary();
+
+        $this->assertEquals($expectedInvalidations, $actualInvalidations);
+    }
+
+    public function test_removeInvalidationsFromDistributedList_removesEntriesFromList_WhenNoPluginSpecified()
+    {
+        $this->invalidator->scheduleReArchiving([1,2,3], 'ExamplePlugin');
+        $this->invalidator->scheduleReArchiving([1,4,5], 'MyOtherPlugin');
+
+        $list = new ReArchiveList();
+        $list->add('badjson');
+
+        $this->invalidator->removeInvalidationsFromDistributedList([2,3]);
+
+        $items = $list->getAll();
+
+        $expected = [
+            '{"idSites":[1],"pluginName":"ExamplePlugin","report":null,"startDate":null,"segment":null}',
+            '{"idSites":[1,4,5],"pluginName":"MyOtherPlugin","report":null,"startDate":null,"segment":null}',
+        ];
+
+        $this->assertEquals($expected, $items);
+    }
+
+    public function test_removeInvalidationsFromDistributedList_removesEntriesFromList_WhenPluginNameIsSpecified()
+    {
+        $this->invalidator->scheduleReArchiving([1,2,3], 'ExamplePlugin');
+        $this->invalidator->scheduleReArchiving([1,4,5], 'MyOtherPlugin');
+
+        $this->invalidator->removeInvalidationsFromDistributedList([1,2,3], 'ExamplePlugin');
+
+        $list = new ReArchiveList();
+        $items = $list->getAll();
+
+        $expected = [
+            '{"idSites":[1,4,5],"pluginName":"MyOtherPlugin","report":null,"startDate":null,"segment":null}',
+        ];
+
+        $this->assertEquals($expected, $items);
+    }
+
+    public function test_removeInvalidationsFromDistributedList_removesAllSiteEntries()
+    {
+        $this->invalidator->scheduleReArchiving([1, 2, 3], 'ExamplePlugin');
+        $this->invalidator->scheduleReArchiving([1, 4, 5], 'ExamplePlugin');
+        $this->invalidator->scheduleReArchiving('all', 'ExamplePlugin');
+
+        $this->invalidator->removeInvalidationsFromDistributedList('all', 'ExamplePlugin');
+
+        $list = new ReArchiveList();
+        $items = $list->getAll();
+
+        $expected = [];
+
+        $this->assertEquals($expected, $items);
+    }
+
+    public function test_removeInvalidationsFromDistributedList_removesEntriesFromList_WhenPluginNameAndReportIsSpecified()
+    {
+        $this->invalidator->scheduleReArchiving([1,4,5], 'ExamplePlugin');
+        $this->invalidator->scheduleReArchiving([1,4,5], 'ExamplePlugin', 'myReport');
+        $this->invalidator->scheduleReArchiving([1,4,5], 'ExamplePlugin', 'myOtherReport');
+
+        $this->invalidator->removeInvalidationsFromDistributedList([1,4,5], 'ExamplePlugin', 'myReport');
+
+        $list = new ReArchiveList();
+        $items = $list->getAll();
+
+        $expected = [
+            '{"idSites":[1,4,5],"pluginName":"ExamplePlugin","report":null,"startDate":null,"segment":null}',
+            '{"idSites":[1,4,5],"pluginName":"ExamplePlugin","report":"myOtherReport","startDate":null,"segment":null}',
+        ];
+
+        $this->assertEquals($expected, $items);
+    }
+
+    public function test_removeInvalidations_removesAll_ifAllSitesSpecified()
+    {
+        $this->insertInvalidations([
+            ['name' => 'done.MyPlugin', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'report' => 'myReport'],
+            ['name' => 'done.MyPlugin', 'idsite' => 2, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'report' => null],
+            ['name' => 'done.MyOtherPlugin', 'idsite' => 3, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'report' => ''],
+            ['name' => 'done', 'idsite' => 4, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'report' => ''],
+            ['name' => 'done.MyPlugin', 'idsite' => 5, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'report' => 'myOtherReport'],
+        ]);
+
+        $this->invalidator->removeInvalidations($idSite = 'all', 'MyPlugin');
+
+        $invalidations = $this->getInvalidatedArchiveTableEntries();
+        $expectedInvalidations = [
+            ['idarchive' => null, 'idsite' => 3, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'name' => 'done.MyOtherPlugin', 'report' => null],
+            ['idarchive' => null, 'idsite' => 4, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'name' => 'done', 'report' => null],
+        ];
+
+        $this->assertEquals($expectedInvalidations, $invalidations);
+    }
+
+    public function test_removeInvalidations_removesAllForMultipleSites()
+    {
+        $this->insertInvalidations([
+            ['name' => 'done.MyPlugin', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'report' => 'myReport'],
+            ['name' => 'done.MyPlugin', 'idsite' => 2, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'report' => null],
+            ['name' => 'done.MyOtherPlugin', 'idsite' => 3, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'report' => ''],
+            ['name' => 'done', 'idsite' => 4, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'report' => ''],
+            ['name' => 'done.MyPlugin', 'idsite' => 5, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'report' => 'myOtherReport'],
+        ]);
+
+        $this->invalidator->removeInvalidations([1,2,3], 'MyPlugin');
+
+        $invalidations = $this->getInvalidatedArchiveTableEntries();
+        $expectedInvalidations = [
+            ['idarchive' => null, 'idsite' => 3, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'name' => 'done.MyOtherPlugin', 'report' => null],
+            ['idarchive' => null, 'idsite' => 4, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'name' => 'done', 'report' => null],
+            ['idarchive' => null, 'idsite' => 5, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'name' => 'done.MyPlugin', 'report' => 'myOtherReport'],
+        ];
+
+        $this->assertEquals($expectedInvalidations, $invalidations);
+    }
+
+    public function test_removeInvalidations_removesAllForPlugin()
+    {
+        $this->insertInvalidations([
+            ['name' => 'done.MyPlugin', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'report' => 'myReport'],
+            ['name' => 'done.MyPlugin', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'report' => null],
+            ['name' => 'doneSEGMENTHASH.MyPlugin', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'report' => null],
+            ['name' => 'done.MyOtherPlugin', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'report' => ''],
+            ['name' => 'doneSEGMENTHASH.MyOtherPlugin', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'report' => ''],
+            ['name' => 'done', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'report' => ''],
+            ['name' => 'done.MyPlugin', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'report' => 'myOtherReport'],
+        ]);
+
+        $this->invalidator->removeInvalidations($idSite = 1, 'MyPlugin');
+
+        $invalidations = $this->getInvalidatedArchiveTableEntries();
+        $expectedInvalidations = [
+            ['idarchive' => null, 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'name' => 'done.MyOtherPlugin', 'report' => null],
+            ['idarchive' => null, 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'name' => 'doneSEGMENTHASH.MyOtherPlugin', 'report' => null],
+            ['idarchive' => null, 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'name' => 'done', 'report' => null],
+        ];
+
+        $this->assertEquals($expectedInvalidations, $invalidations);
+    }
+
+    public function test_removeInvalidations_removesAllForSingleReport()
+    {
+        $this->insertInvalidations([
+            ['name' => 'done.MyPlugin', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'report' => 'myReport'],
+            ['name' => 'done.MyPlugin', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'report' => null],
+            ['name' => 'doneSEGMENTHASH.MyPlugin', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'report' => null],
+            ['name' => 'doneSEGMENTHASH.MyPlugin', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'report' => 'myReport'],
+            ['name' => 'done.MyOtherPlugin', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'report' => ''],
+            ['name' => 'done', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-05-05', 'period' => 1, 'report' => ''],
+            ['name' => 'done.MyPlugin', 'idsite' => 1, 'date1' => '2012-03-04', 'date2' => '2015-03-04', 'period' => 1, 'report' => 'myOtherReport'],
+        ]);
+
+        $this->invalidator->removeInvalidations($idSite = 1, 'MyPlugin', 'myReport');
+
+        $invalidations = $this->getInvalidatedArchiveTableEntries();
+        $expectedInvalidations = [
+            [
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2012-03-04',
+                'date2' => '2015-03-04',
+                'period' => '1',
+                'name' => 'done.MyPlugin',
+                'report' => NULL,
+            ],
+            [
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2012-03-04',
+                'date2' => '2015-03-04',
+                'period' => '1',
+                'name' => 'doneSEGMENTHASH.MyPlugin',
+                'report' => NULL,
+            ],
+            [
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2012-03-04',
+                'date2' => '2015-05-05',
+                'period' => '1',
+                'name' => 'done.MyOtherPlugin',
+                'report' => '',
+            ],
+            [
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2012-03-04',
+                'date2' => '2015-05-05',
+                'period' => '1',
+                'name' => 'done',
+                'report' => '',
+            ],
+            [
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2012-03-04',
+                'date2' => '2015-03-04',
+                'period' => '1',
+                'name' => 'done.MyPlugin',
+                'report' => 'myOtherReport',
+            ],
+        ];
+
+        $this->assertEquals($expectedInvalidations, $invalidations);
     }
 
     public function test_rememberToInvalidateArchivedReportsLater_shouldCreateAnEntryInCaseThereIsNoneYet()
@@ -197,7 +428,7 @@ class ArchiveInvalidatorTest extends IntegrationTestCase
         $this->assertSameReports($expected, $reports);
     }
 
-    public function test_markArchivesAsInvalidated_shouldForgetInvalidatedSitesAndDates()
+    public function test_markArchivesAsInvalidated_shouldForgetInvalidatedSitesAndDates_IfPeriodIsDay()
     {
         $this->rememberReportsForManySitesAndDates();
 
@@ -208,7 +439,7 @@ class ArchiveInvalidatorTest extends IntegrationTestCase
             Date::factory('2010-10-10'),
         );
 
-        $this->invalidator->markArchivesAsInvalidated($idSites, $dates, 'week');
+        $this->invalidator->markArchivesAsInvalidated($idSites, $dates, 'day');
         $reports = $this->invalidator->getRememberedArchivedReportsThatShouldBeInvalidated();
 
         $expected = array(
@@ -353,6 +584,68 @@ class ArchiveInvalidatorTest extends IntegrationTestCase
 
         $invalidatedArchiveTableEntries = $this->getInvalidatedArchiveTableEntries();
         $this->assertEqualsSorted($expectedEntries, $invalidatedArchiveTableEntries);
+    }
+
+    public function test_markArchivesAsInvalidated_AddsInvalidationEntries_ButDoesNotMarkArchivesAsInvalidated_IfArchiveIsPartial()
+    {
+        // insert some partial archives
+        $this->insertArchiveRow(1, '2020-03-04', 'day', ArchiveWriter::DONE_OK, false, false);
+        $this->insertArchiveRow(1, '2020-03-04', 'day', ArchiveWriter::DONE_OK, 'ExamplePlugin', false);
+        $this->insertArchiveRow(1, '2020-03-04', 'day', ArchiveWriter::DONE_PARTIAL, 'ExamplePlugin', false);
+        $this->insertArchiveRow(1, '2020-03-04', 'day', ArchiveWriter::DONE_PARTIAL, 'ExamplePlugin', false);
+        $this->insertArchiveRow(1, '2020-03-04', 'day', ArchiveWriter::DONE_PARTIAL, 'ExamplePlugin', false);
+
+        /** @var ArchiveInvalidator $archiveInvalidator */
+        $archiveInvalidator = self::$fixture->piwikEnvironment->getContainer()->get('Piwik\Archive\ArchiveInvalidator');
+
+        $result = $archiveInvalidator->markArchivesAsInvalidated([1], ['2020-03-04'], 'day', null, false, false, 'ExamplePlugin.someData');
+
+        $this->assertEquals([Date::factory('2020-03-04')], $result->processedDates);
+
+        $idArchives = $this->getInvalidatedArchives();
+        $this->assertEquals([], $idArchives);
+
+        $expectedInvalidatedArchives = [
+            [
+                'idarchive' => null,
+                'idsite' => '1',
+                'date1' => '2020-01-01',
+                'date2' => '2020-12-31',
+                'period' => '4',
+                'name' => 'done.ExamplePlugin',
+                'report' => 'someData',
+            ],
+            [
+                'idarchive' => null,
+                'idsite' => '1',
+                'date1' => '2020-03-01',
+                'date2' => '2020-03-31',
+                'period' => '3',
+                'name' => 'done.ExamplePlugin',
+                'report' => 'someData',
+            ],
+            [
+                'idarchive' => null,
+                'idsite' => '1',
+                'date1' => '2020-03-02',
+                'date2' => '2020-03-08',
+                'period' => '2',
+                'name' => 'done.ExamplePlugin',
+                'report' => 'someData',
+            ],
+            [
+                'idarchive' => null,
+                'idsite' => '1',
+                'date1' => '2020-03-04',
+                'date2' => '2020-03-04',
+                'period' => '1',
+                'name' => 'done.ExamplePlugin',
+                'report' => 'someData',
+            ],
+        ];
+
+        $invalidations = $this->getInvalidatedArchiveTableEntries();
+        $this->assertEqualsSorted($expectedInvalidatedArchives, $invalidations);
     }
 
     /**
@@ -993,6 +1286,343 @@ class ArchiveInvalidatorTest extends IntegrationTestCase
             $expectedInvalidatedArchives, $report);
     }
 
+    public function test_markArchivesAsInvalidated_doesNotInsertDuplicateInvalidations()
+    {
+        $this->insertArchiveRowsForTest();
+
+        $segment = 'browserCode==IE';
+        $segment = new Segment($segment, [1]);
+
+        $segmentHash = $segment->getHash();
+
+        /** @var ArchiveInvalidator $archiveInvalidator */
+        $archiveInvalidator = self::$fixture->piwikEnvironment->getContainer()->get('Piwik\Archive\ArchiveInvalidator');
+
+        $existingInvalidations = [
+            ['name' => 'done' . $segmentHash, 'idsite' => 1, 'date1' => '2020-03-02', 'date2' => '2020-03-08', 'period' => 2, 'report' => null],
+
+            ['name' => 'done' . $segmentHash, 'idsite' => 1, 'date1' => '2020-05-04', 'date2' => '2020-05-04', 'period' => 1, 'report' => null],
+            ['name' => 'done' . $segmentHash, 'idsite' => 1, 'date1' => '2020-05-05', 'date2' => '2020-05-05', 'period' => 1, 'report' => null],
+            ['name' => 'done' . $segmentHash, 'idsite' => 1, 'date1' => '2020-05-06', 'date2' => '2020-05-06', 'period' => 1, 'report' => null],
+            ['name' => 'done' . $segmentHash, 'idsite' => 1, 'date1' => '2020-05-07', 'date2' => '2020-05-07', 'period' => 1, 'report' => null],
+            ['name' => 'done' . $segmentHash, 'idsite' => 1, 'date1' => '2020-05-08', 'date2' => '2020-05-08', 'period' => 1, 'report' => null],
+            ['name' => 'done' . $segmentHash, 'idsite' => 1, 'date1' => '2020-05-09', 'date2' => '2020-05-09', 'period' => 1, 'report' => null],
+            ['name' => 'done' . $segmentHash, 'idsite' => 1, 'date1' => '2020-05-10', 'date2' => '2020-05-10', 'period' => 1, 'report' => null],
+
+            ['name' => 'done' . $segmentHash, 'idsite' => 1, 'date1' => '2020-05-01', 'date2' => '2020-05-31', 'period' => 3, 'report' => null],
+
+            ['name' => 'done' . $segmentHash, 'idsite' => 1, 'date1' => '2020-05-01', 'date2' => '2020-05-31', 'period' => 4, 'report' => 'aReport'],
+            ['name' => 'done' . $segmentHash, 'idsite' => 1, 'date1' => '2020-05-01', 'date2' => '2020-05-31', 'period' => 4, 'report' => 'anotherReport'],
+        ];
+
+        $this->insertInvalidations($existingInvalidations);
+
+        $archiveInvalidator->markArchivesAsInvalidated([1], ['2020-03-04', '2020-05-06'], 'week',
+            $segment, $cascadeDown = true, false);
+        $archiveInvalidator->markArchivesAsInvalidated([1], ['2020-05-01'], 'year',
+            $segment, $cascadeDown = false, 'aReport');
+
+        $expectedInvalidations = [
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-03-02',
+                'date2' => '2020-03-08',
+                'period' => '2',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-05-04',
+                'date2' => '2020-05-04',
+                'period' => '1',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-05-05',
+                'date2' => '2020-05-05',
+                'period' => '1',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-05-06',
+                'date2' => '2020-05-06',
+                'period' => '1',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-05-07',
+                'date2' => '2020-05-07',
+                'period' => '1',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-05-08',
+                'date2' => '2020-05-08',
+                'period' => '1',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-05-09',
+                'date2' => '2020-05-09',
+                'period' => '1',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-05-10',
+                'date2' => '2020-05-10',
+                'period' => '1',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-05-01',
+                'date2' => '2020-05-31',
+                'period' => '3',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => null,
+                'idsite' => '1',
+                'date1' => '2020-05-01',
+                'date2' => '2020-05-31',
+                'period' => '4',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => 'aReport',
+            ),
+            array (
+                'idarchive' => null,
+                'idsite' => '1',
+                'date1' => '2020-05-01',
+                'date2' => '2020-05-31',
+                'period' => '4',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => 'anotherReport',
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-03-02',
+                'date2' => '2020-03-02',
+                'period' => '1',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-03-01',
+                'date2' => '2020-03-31',
+                'period' => '3',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-03-03',
+                'date2' => '2020-03-03',
+                'period' => '1',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-03-04',
+                'date2' => '2020-03-04',
+                'period' => '1',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-03-05',
+                'date2' => '2020-03-05',
+                'period' => '1',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-03-06',
+                'date2' => '2020-03-06',
+                'period' => '1',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-03-07',
+                'date2' => '2020-03-07',
+                'period' => '1',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-03-08',
+                'date2' => '2020-03-08',
+                'period' => '1',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-01-01',
+                'date2' => '2020-12-31',
+                'period' => '4',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+            array (
+                'idarchive' => NULL,
+                'idsite' => '1',
+                'date1' => '2020-05-04',
+                'date2' => '2020-05-10',
+                'period' => '2',
+                'name' => 'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+                'report' => NULL,
+            ),
+        ];
+
+        $actualInvalidations = $this->getInvalidatedArchiveTableEntries();
+
+        $this->assertEquals($expectedInvalidations, $actualInvalidations);
+    }
+
+    public function test_reArchiveReport_createsCorrectInvalidationEntries_forAllSitesIfAllSpecified()
+    {
+        Date::$now = strtotime('2020-06-16 12:00:00');
+
+        Config::getInstance()->General['rearchive_reports_in_past_last_n_months'] = 'last1';
+
+        $this->invalidator->scheduleReArchiving('all', 'VisitsSummary');
+        $this->invalidator->applyScheduledReArchiving();
+
+        $countInvalidations = $this->getNumInvalidations();
+
+        $invalidationSites = Db::fetchAll("SELECT DISTINCT idsite FROM " . Common::prefixTable('archive_invalidations'));
+        $invalidationSites = array_column($invalidationSites, 'idsite');
+
+        $this->assertEquals(550, $countInvalidations);
+        $this->assertEquals([1,2,3,4,5,6,7,8,9,10], $invalidationSites);
+    }
+
+    public function test_reArchiveReport_createsCorrectInvalidationEntries_ifReArchivingSegments()
+    {
+        Date::$now = strtotime('2020-06-16 12:00:00');
+
+        Rules::setBrowserTriggerArchiving(false);
+        API::getInstance()->add('autoArchiveSegment', 'browserCode==IE', false, true);
+        API::getInstance()->add('secondArchiveSegment', 'browserCode==FF', false, true);
+        Rules::setBrowserTriggerArchiving(true);
+
+        $reArchiveList = new ReArchiveList();
+        $reArchiveList->setAll([]); // clear list since adding segments will add to it
+
+        Config::getInstance()->General['rearchive_reports_in_past_last_n_months'] = '1';
+        Config::getInstance()->General['rearchive_reports_in_past_exclude_segments'] = 0;
+
+        $this->invalidator->scheduleReArchiving(1);
+        $this->invalidator->applyScheduledReArchiving();
+
+        $invalidationNames = Db::fetchAll("SELECT `name` FROM " . Common::prefixTable('archive_invalidations'));
+        $invalidationNames = array_column($invalidationNames, 'name');
+
+        $expectedCount = 165;
+        $this->assertCount($expectedCount, $invalidationNames);
+
+        $invalidationNames = array_unique($invalidationNames);
+        $invalidationNames = array_values($invalidationNames);
+
+        $expectedInvalidationNames = [
+            'done',
+            'done5f4f9bafeda3443c3c2d4b2ef4dffadc',
+            'done3736b708e4d20cfc10610e816a1b2341',
+        ];
+        $this->assertEquals($expectedInvalidationNames, $invalidationNames);
+    }
+
+    public function test_reArchiveReport_createsCorrectInvalidationEntries_ifNotReArchivingSegments()
+    {
+        Date::$now = strtotime('2020-06-16 12:00:00');
+
+        Rules::setBrowserTriggerArchiving(false);
+        API::getInstance()->add('autoArchiveSegment', 'browserCode==IE', false, true);
+        API::getInstance()->add('secondArchiveSegment', 'browserCode==FF', false, true);
+        Rules::setBrowserTriggerArchiving(true);
+
+        $reArchiveList = new ReArchiveList();
+        $reArchiveList->setAll([]); // clear list since adding segments will add to it
+
+        Config::getInstance()->General['rearchive_reports_in_past_last_n_months'] = 1;
+        Config::getInstance()->General['rearchive_reports_in_past_exclude_segments'] = 1;
+
+        $this->invalidator->scheduleReArchiving(1);
+        $this->invalidator->applyScheduledReArchiving();
+
+        $invalidationNames = Db::fetchAll("SELECT `name` FROM " . Common::prefixTable('archive_invalidations'));
+        $invalidationNames = array_column($invalidationNames, 'name');
+
+        $expectedCount = 55;
+        $this->assertCount($expectedCount, $invalidationNames);
+
+        $invalidationNames = array_unique($invalidationNames);
+        $invalidationNames = array_values($invalidationNames);
+
+        $expectedInvalidationNames = [
+            'done',
+        ];
+        $this->assertEquals($expectedInvalidationNames, $invalidationNames);
+    }
+
+    private function getNumInvalidations()
+    {
+        return Db::fetchOne("SELECT COUNT(*) FROM " . Common::prefixTable('archive_invalidations'));
+    }
+
+    public function test_scheduleReArchiving_cleanupWhenReportGiven()
+    {
+        $this->invalidator->scheduleReArchiving([1, 2, 3], 'ExamplePlugin', '5');
+        $this->invalidator->applyScheduledReArchiving();
+        $numInvalidations = $this->getNumInvalidations();
+        $this->assertGreaterThanOrEqual(600, $numInvalidations);
+
+        $this->invalidator->scheduleReArchiving([1, 2, 3], 'ExamplePlugin', '5');
+        $this->invalidator->applyScheduledReArchiving();
+        // should not end up having twice the amount of invalidations but delete existing
+        $this->assertEquals($numInvalidations, $this->getNumInvalidations());
+
+    }
     public function test_reArchiveReport_createsCorrectInvalidationEntries_ifNoReportSpecified()
     {
         Date::$now = strtotime('2020-06-16 12:00:00');
@@ -1106,6 +1736,64 @@ class ArchiveInvalidatorTest extends IntegrationTestCase
         $this->assertEquals($expectedInvalidations, $actualInvalidations);
     }
 
+    public function test_reArchive_acceptsCustomStartDate()
+    {
+        Date::$now = strtotime('2020-06-16 12:00:00');
+
+        Config::getInstance()->General['rearchive_reports_in_past_last_n_months'] = 'last3';
+
+        $customStartDate = Date::yesterday()->subMonth(1)->setDay(1);
+        $this->invalidator->reArchiveReport([1], 'VisitsSummary', 'some.Report', $customStartDate);
+
+        $expectedInvalidations = [
+            array (
+                'idsite' => '1',
+                'period' => '1',
+                'name' => 'done.VisitsSummary',
+                'report' => 'some.Report',
+                'dates' => '2020-05-01,2020-05-01|2020-05-02,2020-05-02|2020-05-03,2020-05-03|2020-05-04,2020-05-04|2020-05-05,2020-05-05'
+                    . '|2020-05-06,2020-05-06|2020-05-07,2020-05-07|2020-05-08,2020-05-08|2020-05-09,2020-05-09|2020-05-10,2020-05-10'
+                    . '|2020-05-11,2020-05-11|2020-05-12,2020-05-12|2020-05-13,2020-05-13|2020-05-14,2020-05-14|2020-05-15,2020-05-15'
+                    . '|2020-05-16,2020-05-16|2020-05-17,2020-05-17|2020-05-18,2020-05-18|2020-05-19,2020-05-19|2020-05-20,2020-05-20'
+                    . '|2020-05-21,2020-05-21|2020-05-22,2020-05-22|2020-05-23,2020-05-23|2020-05-24,2020-05-24|2020-05-25,2020-05-25'
+                    . '|2020-05-26,2020-05-26|2020-05-27,2020-05-27|2020-05-28,2020-05-28|2020-05-29,2020-05-29|2020-05-30,2020-05-30'
+                    . '|2020-05-31,2020-05-31|2020-06-01,2020-06-01|2020-06-02,2020-06-02|2020-06-03,2020-06-03|2020-06-04,2020-06-04'
+                    . '|2020-06-05,2020-06-05|2020-06-06,2020-06-06|2020-06-07,2020-06-07|2020-06-08,2020-06-08|2020-06-09,2020-06-09'
+                    . '|2020-06-10,2020-06-10|2020-06-11,2020-06-11|2020-06-12,2020-06-12|2020-06-13,2020-06-13|2020-06-14,2020-06-14',
+                'count' => '45',
+            ),
+            array (
+                'idsite' => '1',
+                'period' => '2',
+                'name' => 'done.VisitsSummary',
+                'report' => 'some.Report',
+                'dates' => '2020-05-04,2020-05-10|2020-05-11,2020-05-17|2020-05-18,2020-05-24|2020-05-25,2020-05-31|2020-04-27,2020-05-03'
+                    . '|2020-06-01,2020-06-07|2020-06-08,2020-06-14',
+                'count' => '7',
+            ),
+            array (
+                'idsite' => '1',
+                'period' => '3',
+                'name' => 'done.VisitsSummary',
+                'report' => 'some.Report',
+                'dates' => '2020-05-01,2020-05-31|2020-06-01,2020-06-30',
+                'count' => '2',
+            ),
+            array (
+                'idsite' => '1',
+                'period' => '4',
+                'name' => 'done.VisitsSummary',
+                'report' => 'some.Report',
+                'dates' => '2020-01-01,2020-12-31',
+                'count' => '1',
+            ),
+        ];
+
+        $actualInvalidations = $this->getInvalidatedArchiveTableEntriesSummary();
+
+        $this->assertEquals($expectedInvalidations, $actualInvalidations);
+    }
+
     public function test_reArchive_alsoInvalidatesSegments()
     {
         Date::$now = strtotime('2020-06-16 12:00:00');
@@ -1119,8 +1807,10 @@ class ArchiveInvalidatorTest extends IntegrationTestCase
         $t->setUrl('http://test.com/test');
         Fixture::checkResponse($t->doTrackPageView('test page'));
 
+        Rules::setBrowserTriggerArchiving(false);
         API::getInstance()->add('autoArchiveSegment', 'browserCode==IE', false, true);
         API::getInstance()->add('browserArchiveSegment', 'browserCode==IE', false, false);
+        Rules::setBrowserTriggerArchiving(true);
 
         $this->invalidator->reArchiveReport([$idSite], 'VisitsSummary', 'some.Report');
 
@@ -1202,8 +1892,7 @@ class ArchiveInvalidatorTest extends IntegrationTestCase
         foreach (ArchiveTableCreator::getTablesArchivesInstalled(ArchiveTableCreator::NUMERIC_TABLE) as $table) {
             $date = ArchiveTableCreator::getDateFromTableName($table);
 
-            $idArchives = Db::fetchAll("SELECT idarchive FROM $table WHERE name LIKE 'done%' AND value = ?", array(ArchiveWriter::DONE_INVALIDATED));
-            $idArchives = array_map('reset', $idArchives);
+            $idArchives = Db::query("SELECT idarchive FROM $table WHERE name LIKE 'done%' AND value = ?", array(ArchiveWriter::DONE_INVALIDATED))->fetchAll(\Zend_Db::FETCH_COLUMN);
 
             $result[$date] = $idArchives;
         }
@@ -1221,8 +1910,7 @@ class ArchiveInvalidatorTest extends IntegrationTestCase
                 $sql .= " AND ts_archived IS NOT NULL";
             }
 
-            $archiveSpecs = Db::fetchAll($sql, array(ArchiveWriter::DONE_INVALIDATED));
-            $archiveSpecs = array_map('reset', $archiveSpecs);
+            $archiveSpecs = Db::query($sql, array(ArchiveWriter::DONE_INVALIDATED))->fetchAll(\Zend_Db::FETCH_COLUMN);
             if (empty($archiveSpecs)) {
                 continue;
             }
@@ -1261,7 +1949,7 @@ class ArchiveInvalidatorTest extends IntegrationTestCase
         }
     }
 
-    private function insertArchiveRow($idSite, $date, $periodLabel, $doneValue = ArchiveWriter::DONE_OK)
+    private function insertArchiveRow($idSite, $date, $periodLabel, $doneValue = ArchiveWriter::DONE_OK, $plugin = false, $varyArchiveTypes = true)
     {
         $periodObject = \Piwik\Period\Factory::build($periodLabel, $date);
         $dateStart = $periodObject->getDateStart();
@@ -1274,15 +1962,19 @@ class ArchiveInvalidatorTest extends IntegrationTestCase
 
         $periodId = Piwik::$idPeriods[$periodLabel];
 
-        $doneFlag = 'done';
-        if ($idArchive % 5 == 1) {
-            $doneFlag = Rules::getDoneFlagArchiveContainsAllPlugins(self::$segment1);
-        } else if ($idArchive % 5 == 2) {
-            $doneFlag .= '.VisitsSummary';
-        } else if ($idArchive % 5 == 3) {
-            $doneFlag = Rules::getDoneFlagArchiveContainsOnePlugin(self::$segment1, 'UserCountry');
-        } else if ($idArchive % 5 == 4) {
-            $doneFlag = Rules::getDoneFlagArchiveContainsAllPlugins(self::$segment2);
+        if ($varyArchiveTypes) {
+            $doneFlag = 'done';
+            if ($idArchive % 5 == 1) {
+                $doneFlag = Rules::getDoneFlagArchiveContainsAllPlugins(self::$segment1);
+            } else if ($idArchive % 5 == 2) {
+                $doneFlag .= '.VisitsSummary';
+            } else if ($idArchive % 5 == 3) {
+                $doneFlag = Rules::getDoneFlagArchiveContainsOnePlugin(self::$segment1, 'UserCountry');
+            } else if ($idArchive % 5 == 4) {
+                $doneFlag = Rules::getDoneFlagArchiveContainsAllPlugins(self::$segment2);
+            }
+        } else {
+            $doneFlag = $plugin ? 'done.' . $plugin : 'done';
         }
 
         $sql = "INSERT INTO $table (idarchive, name, value, idsite, date1, date2, period, ts_archived)
@@ -1333,5 +2025,21 @@ class ArchiveInvalidatorTest extends IntegrationTestCase
     {
         parent::configureFixture($fixture);
         $fixture->createSuperUser = true;
+    }
+
+    private function insertInvalidations(array $invalidations)
+    {
+        $table = Common::prefixTable('archive_invalidations');
+        foreach ($invalidations as $invalidation) {
+            $sql = "INSERT INTO $table (name, idsite, date1, date2, period, ts_invalidated, report) VALUES (?, ?, ?, ?, ?, NOW(), ?)";
+            Db::query($sql, [
+                $invalidation['name'],
+                $invalidation['idsite'],
+                $invalidation['date1'],
+                $invalidation['date2'],
+                $invalidation['period'],
+                $invalidation['report'],
+            ]);
+        }
     }
 }

@@ -176,11 +176,12 @@ class Twig
         $this->addFilter_prettyDate();
         $this->addFilter_safeDecodeRaw();
         $this->addFilter_number();
+        $this->addFilter_anonymiseSystemInfo();
         $this->addFilter_nonce();
         $this->addFilter_md5();
         $this->addFilter_onlyDomain();
         $this->addFilter_safelink();
-        $this->twig->addFilter(new TwigFilter('implode', 'implode'));
+        $this->addFilter_implode();
         $this->twig->addFilter(new TwigFilter('ucwords', 'ucwords'));
         $this->twig->addFilter(new TwigFilter('lcfirst', 'lcfirst'));
         $this->twig->addFilter(new TwigFilter('ucfirst', 'ucfirst'));
@@ -434,6 +435,32 @@ class Twig
         $this->twig->addFilter($formatter);
     }
 
+    protected function addFilter_anonymiseSystemInfo()
+    {
+        $formatter = new TwigFilter('anonymiseSystemInfo', function ($string) {
+            if ($string === null) {
+                return '';
+            }
+            if ($string === false || $string === true) {
+                return (int) $string;
+            }
+            $string = str_replace([PIWIK_DOCUMENT_ROOT,  str_replace( '/', '\/', PIWIK_DOCUMENT_ROOT )], '$DOC_ROOT', $string);
+            $string = str_replace([PIWIK_USER_PATH,  str_replace( '/', '\/', PIWIK_USER_PATH ) ], '$USER_PATH', $string);
+            $string = str_replace([PIWIK_INCLUDE_PATH,  str_replace( '/', '\/', PIWIK_INCLUDE_PATH ) ], '$INCLUDE_PATH', $string);
+
+            // replace anything token like
+            $string = preg_replace('/[[:xdigit:]]{31,80}/', 'TOKEN_REPLACED', $string);
+
+            // just in case it was somehow show in a text
+            if (SettingsPiwik::isMatomoInstalled()) {
+                $string = str_replace(SettingsPiwik::getPiwikUrl(), '$MATOMO_URL', $string);
+                $string = str_replace(SettingsPiwik::getSalt(), '$MATOMO_SALT', $string);
+            }
+            return $string;
+        });
+        $this->twig->addFilter($formatter);
+    }
+
     protected function addFilter_nonce()
     {
         $nonce = new TwigFilter('nonce', array('Piwik\\Nonce', 'getNonce'));
@@ -574,6 +601,14 @@ class Twig
             return $url;
         });
         $this->twig->addFilter($safelink);
+    }
+
+    private function addFilter_implode()
+    {
+        $implode = new TwigFilter('implode', function ($value, $separator) {
+            return implode($separator, $value);
+        });
+        $this->twig->addFilter($implode);
     }
 
     private function addTest_isNumeric()

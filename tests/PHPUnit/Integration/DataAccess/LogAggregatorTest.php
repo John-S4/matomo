@@ -22,6 +22,7 @@ use Piwik\Site;
 use Piwik\Tests\Fixtures\OneVisitorTwoVisits;
 use Piwik\Tests\Framework\Fixture;
 use Piwik\Tests\Framework\TestCase\IntegrationTestCase;
+use Piwik\Updater\Migration\Db as DbMigration;
 
 /**
  * @group Core
@@ -41,19 +42,29 @@ class LogAggregatorTest extends IntegrationTestCase
      */
     private $logAggregator;
 
+    /**
+     * @var Site
+     */
+    private $site;
+
+    /**
+     * @var Period
+     */
+    private $period;
+
     public function setUp(): void
     {
         parent::setUp();
 
         $idSite = 1;
 
-        $site = new Site($idSite);
+        $this->site = new Site($idSite);
         $date = Date::factory('2010-03-06');
-        $period = Period\Factory::build('month', $date);
-        $segment = new Segment('', array($site->getId()));
+        $this->period = Period\Factory::build('month', $date);
+        $segment = new Segment('', array($this->site->getId()));
 
 
-        $params = new Parameters($site, $period, $segment);
+        $params = new Parameters($this->site, $this->period, $segment);
         $this->logAggregator = new LogAggregator($params);
     }
 
@@ -62,8 +73,7 @@ class LogAggregatorTest extends IntegrationTestCase
         $query = $this->logAggregator->generateQuery('test, test2', 'log_visit', '1=1', false, '5');
 
         $expected = array(
-            'sql' => '
-			SELECT
+            'sql' => 'SELECT /* sites 1 */ /* 2010-03-01,2010-03-31 */
 				test, test2
 			FROM
 				log_visit AS log_visit
@@ -75,6 +85,135 @@ class LogAggregatorTest extends IntegrationTestCase
                 0 => '2010-03-01 00:00:00',
                 1 => '2010-03-31 23:59:59',
                 2 => 1
+            )
+        );
+        $this->assertSame($expected, $query);
+    }
+
+    public function test_generateQuery_withSegment_shouldNotUseTmpTableWhenNotEnabled()
+    {
+        $segment = new Segment('userId==1', array($this->site->getId()));
+
+        $params = new Parameters($this->site, $this->period, $segment);
+        $this->logAggregator = new LogAggregator($params);
+
+        $query = $this->logAggregator->generateQuery('test, test2', 'log_visit', '1=1', false, '5');
+
+        $expected = array(
+            'sql' => 'SELECT /* segmenthash 4eaf469650796451c610972d0ca1e9e8 */ /* sites 1 */ /* 2010-03-01,2010-03-31 */
+				test, test2
+			FROM
+				log_visit AS log_visit
+			WHERE
+				( 1=1 )
+                AND
+                ( log_visit.user_id = ? )
+			ORDER BY
+				5',
+            'bind' => array (
+                '2010-03-01 00:00:00',
+                '2010-03-31 23:59:59',
+                1,
+                '1'
+            )
+        );
+        $this->assertSame($expected, $query);
+    }
+
+    public function test_generateQuery_withSegment_shouldUseTmpTableWhenEnabled()
+    {
+        $segment = new Segment('userId==1', array($this->site->getId()));
+
+        $params = new Parameters($this->site, $this->period, $segment);
+        $this->logAggregator = new LogAggregator($params);
+        $this->logAggregator->allowUsageSegmentCache();
+
+        $query = $this->logAggregator->generateQuery('test, test2', 'log_visit', '1=1', false, '5');
+
+        $expected = array(
+            'sql' => 'SELECT /* segmenthash 4eaf469650796451c610972d0ca1e9e8 */ /* sites 1 */ /* 2010-03-01,2010-03-31 */
+				test, test2
+			FROM
+				logtmpsegment0e053be69df974017fba4276a0d4347d AS logtmpsegment0e053be69df974017fba4276a0d4347d INNER JOIN log_visit AS log_visit ON log_visit.idvisit = logtmpsegment0e053be69df974017fba4276a0d4347d.idvisit
+			WHERE
+				1=1
+			ORDER BY
+				5',
+            'bind' => array (
+                '2010-03-01 00:00:00',
+                '2010-03-31 23:59:59',
+                1,
+            )
+        );
+        $this->assertSame($expected, $query);
+    }
+
+    public function testSetMaxExecutionTimeOfArchivingQueries()
+    {
+        // limit query to one milli second
+        Config::getInstance()->General['archiving_query_max_execution_time'] = 0.001;
+        try {
+            $this->logAggregator->getDb()->query('SELECT SLEEP(5) FROM ' . Common::prefixTable('log_visit'));
+            $this->fail('Query was not aborted by may execution limit');
+        } catch (\Zend_Db_Statement_Exception $e) {
+            $isMaxExecutionTimeError = $this->logAggregator->getDb()->isErrNo($e, DbMigration::ERROR_CODE_MAX_EXECUTION_TIME_EXCEEDED_QUERY_INTERRUPTED)
+                || $this->logAggregator->getDb()->isErrNo($e, DbMigration::ERROR_CODE_MAX_EXECUTION_TIME_EXCEEDED_SORT_ABORTED)
+                || strpos($e->getMessage(), 'maximum statement execution time exceeded') !== false;
+
+            $this->assertTrue($isMaxExecutionTimeError);
+        }
+    }
+
+    private function setSqlRequirePrimaryKeySetting($val)
+    {
+        try {
+            $this->logAggregator->getDb()->exec('SET SESSION sql_require_primary_key=' . $val);
+        } catch (\Exception $e) {
+            if ($this->logAggregator->getDb()->isErrNo($e, 1193)) {
+                // ignore General error: 1193 Unknown system variable 'sql_require_primary_key'
+                try {
+                    // on mariadb this might work
+                    $this->logAggregator->getDb()->exec('SET SESSION innodb_force_primary_key=' . $val);
+                } catch (\Exception $e) {
+                    if ($this->logAggregator->getDb()->isErrNo($e, 1193)) {
+                        // ignore General error: 1193 Unknown system variable 'sql_require_primary_key'
+                        return;
+                    } else {
+                        throw $e;
+                    }
+                }
+            } else {
+                throw $e;
+            }
+        }
+    }
+
+    public function test_generateQuery_withSegment_shouldUseTmpTableWhenEnabledAndPrimaryKeyRequired()
+    {
+        $segment = new Segment('userId==2', array($this->site->getId()));
+
+        $params = new Parameters($this->site, $this->period, $segment);
+        $this->logAggregator = new LogAggregator($params);
+        $this->logAggregator->allowUsageSegmentCache();
+
+        $this->setSqlRequirePrimaryKeySetting(1);
+
+        $query = $this->logAggregator->generateQuery('test, test2', 'log_visit', '1=1', false, '5');
+
+        $this->setSqlRequirePrimaryKeySetting(0);// reset variable
+        $expected = array(
+            'sql' => 'SELECT /* segmenthash 4a4d16d6897e7fed2d5d151016a5a19c */ /* sites 1 */ /* 2010-03-01,2010-03-31 */
+				test, test2
+			FROM
+				logtmpsegment4ef74412006a3160b17ca5fe99a5f866 AS logtmpsegment4ef74412006a3160b17ca5fe99a5f866 INNER JOIN log_visit AS log_visit ON log_visit.idvisit = logtmpsegment4ef74412006a3160b17ca5fe99a5f866.idvisit
+			WHERE
+				1=1
+			ORDER BY
+				5',
+            'bind' => array (
+                '2010-03-01 00:00:00',
+                '2010-03-31 23:59:59',
+                1,
             )
         );
         $this->assertSame($expected, $query);
@@ -97,7 +236,7 @@ class LogAggregatorTest extends IntegrationTestCase
         $query = $this->logAggregator->generateQuery('test, test2', 'log_visit', '1=1', false, '5');
 
         $expected = array(
-            'sql' => 'SELECT /* MyPluginName */
+            'sql' => 'SELECT /* sites 1 */ /* 2010-03-01,2010-03-31 */ /* MyPluginName */
 				test, test2
 			FROM
 				log_visit AS log_visit

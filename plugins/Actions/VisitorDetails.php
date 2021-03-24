@@ -8,13 +8,16 @@
  */
 namespace Piwik\Plugins\Actions;
 
+use Piwik\Cache;
 use Piwik\Common;
 use Piwik\Config;
 use Piwik\Date;
 use Piwik\Db;
 use Piwik\Metrics\Formatter;
 use Piwik\Piwik;
+use Piwik\Plugin;
 use Piwik\Plugins\Live\VisitorDetailsAbstract;
+use Piwik\Plugins\SitesManager\API as APISitesManager;
 use Piwik\Site;
 use Piwik\Tracker\Action;
 use Piwik\Tracker\PageUrl;
@@ -159,6 +162,14 @@ class VisitorDetails extends VisitorDetailsAbstract
             unset($action['url_prefix']);
         }
 
+        if (array_key_exists('url', $action) && strpos($action['url'], 'http://') === 0) {
+            $host = parse_url($action['url'], PHP_URL_HOST);
+
+            if ($host && PageUrl::shouldUseHttpsHost($visitorDetails['idSite'], $host)) {
+                $action['url'] = 'https://' . Common::mb_substr($action['url'], 7 /* = strlen('http://') */);
+            }
+        }
+
         switch ($action['type']) {
             case 'goal':
                 $action['icon'] = 'plugins/Morpheus/images/goal.png';
@@ -269,6 +280,16 @@ class VisitorDetails extends VisitorDetailsAbstract
 
         // The second join is a LEFT join to allow returning records that don't have a matching page title
         // eg. Downloads, Outlinks. For these, idaction_name is set to 0
+        $pagePerformanceSelect = '';
+        if (Plugin\Manager::getInstance()->isPluginActivated('PagePerformance')) {
+            $pagePerformanceSelect = '( log_link_visit_action.time_network +
+					log_link_visit_action.time_server +
+					log_link_visit_action.time_transfer +
+					log_link_visit_action.time_dom_completion +
+					log_link_visit_action.time_dom_processing +
+					log_link_visit_action.time_on_load ) AS pageLoadTime,';
+        }
+
         $sql           = "
 				SELECT
 					log_link_visit_action.idvisit,
@@ -283,12 +304,7 @@ class VisitorDetails extends VisitorDetailsAbstract
 					log_link_visit_action.time_spent_ref_action as timeSpentRef,
 					log_link_visit_action.idlink_va AS pageId,
 					log_link_visit_action.custom_float,
-					( log_link_visit_action.time_network +
-					log_link_visit_action.time_server +
-					log_link_visit_action.time_transfer +
-					log_link_visit_action.time_dom_completion +
-					log_link_visit_action.time_dom_processing +
-					log_link_visit_action.time_on_load ) AS pageLoadTime,
+					$pagePerformanceSelect
 					log_link_visit_action.pageview_position,
 					log_link_visit_action.search_cat,
 					log_link_visit_action.search_count

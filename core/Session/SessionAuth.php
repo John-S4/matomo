@@ -64,7 +64,9 @@ class SessionAuth implements Auth
 
     public function getLogin()
     {
-        return $this->user['login'];
+        if (isset($this->user['login'])) {
+            return $this->user['login'];
+        }
     }
 
     public function getTokenAuthSecret()
@@ -117,7 +119,9 @@ class SessionAuth implements Auth
 
         $this->updateSessionExpireTime($sessionFingerprint);
 
-        if (!empty($this->tokenAuth) && $this->tokenAuth !== $sessionFingerprint->getSessionTokenAuth()) {
+        if ($this->tokenAuth !== null
+            && $this->tokenAuth !== false
+            && $this->tokenAuth !== $sessionFingerprint->getSessionTokenAuth()) {
             return $this->makeAuthFailure();
         }
 

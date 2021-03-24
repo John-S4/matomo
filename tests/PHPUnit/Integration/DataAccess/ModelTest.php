@@ -14,6 +14,7 @@ use Piwik\DataAccess\ArchiveWriter;
 use Piwik\Date;
 use Piwik\Db;
 use Piwik\Period\Factory;
+use Piwik\Tests\Framework\Fixture;
 use Piwik\Tests\Framework\TestCase\IntegrationTestCase;
 use Piwik\DataAccess\Model;
 
@@ -37,6 +38,75 @@ class ModelTest extends IntegrationTestCase
         $this->model->createArchiveTable($this->tableName, 'archive_numeric');
     }
 
+    public function test_getInvalidatedArchiveIdsSafeToDelete_handlesCutOffGroupMaxLenCorrectly()
+    {
+        Db::get()->query('SET SESSION group_concat_max_len=32');
+
+        $this->insertArchiveData([
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+            ['date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
+        ]);
+
+        // sanity check
+        $table = ArchiveTableCreator::getNumericTable(Date::factory('2020-02-03'));
+        $sql = "SELECT GROUP_CONCAT(idarchive, '.', value ORDER BY ts_archived DESC) as archives
+                  FROM `$table`
+              GROUP BY idsite, date1, date2, period, name";
+        $result = Db::fetchRow($sql);
+        $this->assertEquals(['archives' => '21.1,20.1,19.1,18.1,17.1,16.1,15'], $result);
+
+        $ids = $this->model->getInvalidatedArchiveIdsSafeToDelete($table, $setMaxLen = false);
+
+        $expected = ['20', '19', '18', '17', '16'];
+        $this->assertEquals($expected, $ids);
+    }
+
+    public function test_resetFailedArchivingJobs_updatesCorrectStatuses()
+    {
+        Date::$now = strtotime('2020-03-03 04:00:00');
+
+        $this->insertInvalidations([
+            ['idsite' => 1, 'date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done', 'value' => 1, 'status' => 1, 'ts_invalidated' => '2020-03-01 00:00:00', 'ts_started' => '2020-03-02 03:00:00'],
+            ['idsite' => 2, 'date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'done.Plugin', 'value' => 2, 'status' => 0, 'ts_invalidated' => '2020-03-01 00:00:00', 'ts_started' => '2020-03-02 03:00:00'],
+            ['idsite' => 1, 'date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'doneblablah', 'value' => 3, 'status' => 0, 'ts_invalidated' => '2020-03-01 00:00:00', 'ts_started' => '2020-03-03 00:00:00'],
+            ['idsite' => 3, 'date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'donebluhbluh', 'value' => 4, 'status' => 1, 'ts_invalidated' => '2020-03-01 00:00:00', 'ts_started' => '2020-03-02 12:00:00'],
+            ['idsite' => 1, 'date1' => '2020-02-03', 'date2' => '2020-02-03', 'period' => 1, 'name' => 'donedone', 'value' => 5, 'status' => 1, 'ts_invalidated' => '2020-03-01 00:00:00', 'ts_started' => '2020-03-01 03:00:00'],
+        ]);
+
+        $this->model->resetFailedArchivingJobs();
+
+        $idinvalidationStatus = Db::fetchAll('SELECT idinvalidation, status FROM ' . Common::prefixTable('archive_invalidations'));
+
+        $expected = [
+            ['idinvalidation' => 1, 'status' => 0],
+            ['idinvalidation' => 2, 'status' => 0],
+            ['idinvalidation' => 3, 'status' => 0],
+            ['idinvalidation' => 4, 'status' => 1],
+            ['idinvalidation' => 5, 'status' => 0],
+        ];
+
+        $this->assertEquals($expected, $idinvalidationStatus);
+    }
+
     public function test_insertNewArchiveId()
     {
         $this->assertAllocatedArchiveId(1);
@@ -52,28 +122,6 @@ class ModelTest extends IntegrationTestCase
         $id = $this->model->allocateNewArchiveId($this->tableName);
 
         $this->assertEquals($expectedId, $id);
-    }
-
-    public function test_getInvalidatedArchiveIdsAsOldOrOlderThan_getsCorrectArchiveIds()
-    {
-        $this->insertArchiveData([
-            ['date1' => '2015-02-12', 'date2' => '2015-02-12', 'period' => 3, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
-            ['date1' => '2015-02-01', 'date2' => '2015-02-01', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_INVALIDATED],
-            ['date1' => '2015-02-12', 'date2' => '2015-02-12', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_INVALIDATED],
-            ['date1' => '2015-02-12', 'date2' => '2015-02-12', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_INVALIDATED],
-            ['date1' => '2015-02-12', 'date2' => '2015-02-12', 'period' => 1, 'name' => 'done', 'value' => ArchiveWriter::DONE_OK],
-        ]);
-
-        $idArchives = $this->model->getInvalidatedArchiveIdsAsOldOrOlderThan([
-            'idarchive' => 7,
-            'idsite' => 1,
-            'date1' => '2015-02-12',
-            'date2' => '2015-02-12',
-            'period' => 1,
-            'name' => 'done',
-        ]);
-
-        $this->assertEquals([3, 4], $idArchives);
     }
 
     /**
@@ -198,6 +246,25 @@ class ModelTest extends IntegrationTestCase
             [
                 [
                     ['date1' => '2015-04-01', 'date2' => '2015-04-01', 'period' => 1, 'name' => 'done', 'value' => 1],
+                ],
+                1,
+                '2015-02-04',
+                'year',
+                true,
+            ],
+            [
+                [
+                    ['date1' => '2015-04-01', 'date2' => '2015-04-01', 'period' => 1, 'name' => 'done', 'value' => 4],
+                ],
+                1,
+                '2015-02-04',
+                'year',
+                true,
+            ],
+            [
+                [
+                    ['date1' => '2015-04-01', 'date2' => '2015-04-01', 'period' => 1, 'name' => 'done', 'value' => 5],
+                    ['date1' => '2014-04-01', 'date2' => '2014-04-01', 'period' => 1, 'name' => 'done', 'value' => 1],
                 ],
                 1,
                 '2015-02-04',
@@ -477,18 +544,45 @@ class ModelTest extends IntegrationTestCase
             ),
         );
 
-        $actual = $this->model->getNextInvalidatedArchive(1, null, $useLimit = false);
+        $actual = $this->model->getNextInvalidatedArchive(1, '2030-01-01 00:00:00', null, $useLimit = false);
+        foreach ($actual as &$item) {
+            unset($item['ts_invalidated']);
+        }
 
         $this->assertEquals($expected, $actual);
+    }
+
+    public function test_deleteInvalidationsForDeletedSites()
+    {
+        Fixture::createWebsite('2014-01-01 00:00:00');
+
+        $this->insertInvalidations([
+            ['idsite' => 1, 'date1' => '2014-02-03', 'date2' => '2014-02-03', 'period' => 1, 'name' => 'done'],
+            ['idsite' => 2, 'date1' => '2014-02-01', 'date2' => '2014-02-28', 'period' => 2, 'name' => 'done'],
+            ['idsite' => 2, 'date1' => '2014-02-01', 'date2' => '2014-02-01', 'period' => 1, 'name' => 'done'],
+            ['idsite' => 3, 'date1' => '2014-02-01', 'date2' => '2014-02-01', 'period' => 1, 'name' => 'done'],
+        ]);
+
+        $this->model->deleteInvalidationsForDeletedSites();
+
+        $invalidations = Db::fetchAll("SELECT idsite, idinvalidation FROM " . Common::prefixTable('archive_invalidations') .
+            " ORDER BY idinvalidation ASC");
+        $this->assertEquals([
+            ['idsite' => 1, 'idinvalidation' => 1],
+        ], $invalidations);
     }
 
     private function insertArchiveData($archivesToInsert)
     {
         $idarchive = 1;
+        $now = Date::now()->getDatetime();
         foreach ($archivesToInsert as $archive) {
             $table = ArchiveTableCreator::getNumericTable(Date::factory($archive['date1']));
-            $sql = "INSERT INTO `$table` (idarchive, idsite, date1, date2, period, `name`, `value`) VALUES (?, ?, ?, ?, ?, ?, ?)";
-            Db::query($sql, [$idarchive, 1, $archive['date1'], $archive['date2'], $archive['period'], $archive['name'], $archive['value']]);
+            $sql = "INSERT INTO `$table` (idarchive, idsite, date1, date2, period, `name`, `value`, ts_archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+            Db::query($sql, [
+                $idarchive, 1, $archive['date1'], $archive['date2'], $archive['period'], $archive['name'], $archive['value'],
+                $archive['ts_archived'] ?? $now
+            ]);
 
             ++$idarchive;
         }
@@ -497,9 +591,13 @@ class ModelTest extends IntegrationTestCase
     private function insertInvalidations(array $invalidations)
     {
         $table = Common::prefixTable('archive_invalidations');
+        $now = Date::now()->getDatetime();
         foreach ($invalidations as $invalidation) {
-            $sql = "INSERT INTO `$table` (idsite, date1, date2, period, `name`) VALUES (?, ?, ?, ?, ?)";
-            Db::query($sql, [1, $invalidation['date1'], $invalidation['date2'], $invalidation['period'], $invalidation['name']]);
+            $sql = "INSERT INTO `$table` (idsite, date1, date2, period, `name`, status, ts_invalidated, ts_started) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+            Db::query($sql, [
+                $invalidation['idsite'] ?? 1, $invalidation['date1'], $invalidation['date2'], $invalidation['period'], $invalidation['name'],
+                $invalidation['status'] ?? 0, $invalidation['ts_invalidated'] ?? $now, $invalidation['ts_started'] ?? null,
+            ]);
         }
     }
 }

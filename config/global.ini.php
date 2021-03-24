@@ -261,7 +261,8 @@ currencies[BTC] = Bitcoin
 ; Notes:
 ;  * any existing Segment set to "processed in Real time", will still be set to Real-time.
 ;    this will only affect custom segments added or modified after this setting is changed.
-;  * when set to 0 then any user with at least 'view' access will be able to create pre-processed segments.
+;  * users with at least 'view' access will still be able to create pre-processed segments, regardless
+;    of what this is set to.
 enable_create_realtime_segments = 1
 
 ; Whether to enable the "Suggest values for segment" in the Segment Editor panel.
@@ -355,6 +356,11 @@ archiving_range_force_on_browser_request = 1
 ; If you need any other period, or want to ensure one of those is always archived, you can define them here
 archiving_custom_ranges[] =
 
+; If configured, archiving queries will be aborted after the configured amount of seconds. Set it to -1 if the query time
+; should not be limited. Note: This feature requires a recent MySQL version (5.7 or newer). Some MySQL forks like MariaDB
+; might not support this feature which uses the MAX_EXECUTION_TIME hint.
+archiving_query_max_execution_time = 7200
+
 ; By default Matomo runs OPTIMIZE TABLE SQL queries to free spaces after deleting some data.
 ; If your Matomo tracks millions of pages, the OPTIMIZE TABLE queries might run for hours (seen in "SHOW FULL PROCESSLIST \g")
 ; so you can disable these special queries here:
@@ -388,11 +394,42 @@ disable_checks_usernames_attributes = 0
 ; For legacy data, fallback or non-security scenarios, we use md5.
 hash_algorithm = whirlpool
 
+; set the algorithm used by password_hash()
+; "default" for the algorithm used by the PHP version or one of ["bcrypt", "argon2i", "argon2id"]
+; "argon2id" requires at least PHP 7.3.0
+; for all argon2 algorithms, additional parameters can be changed below
+; any changes are applied to the stored hash on the next login of a user
+; see https://www.php.net/manual/en/function.password-hash.php and https://wiki.php.net/rfc/argon2_password_hash
+; for more information
+password_hash_algorithm = default
+
+; The number of CPU threads used for calculating the hash
+password_hash_argon2_threads = default
+
+; The amount of memory (in KB) used for calculating the hash
+; a minimum of 8 times the number of threads
+password_hash_argon2_memory_cost = default
+
+; The number of iterations for calculating the hash
+password_hash_argon2_time_cost = default
+
 ; If set to 1, Matomo will automatically redirect all http:// requests to https://
 ; If SSL / https is not correctly configured on the server, this will break Matomo
 ; If you set this to 1, and your SSL configuration breaks later on, you can always edit this back to 0
 ; it is recommended for security reasons to always use Matomo over https
 force_ssl = 0
+
+; If set to 1 Matomo will prefer using SERVER_NAME variable over HTTP_HOST.
+; This can add an additional layer of security as SERVER_NAME can not be manipulated by sending custom host headers when configure correctly.
+host_validation_use_server_name = 0
+
+; This list defines the hostnames that a valid sources to download GeoIP databases from. Subdomains of those hostnames will be accepted automatically.
+geolocation_download_from_trusted_hosts[] = maxmind.com
+geolocation_download_from_trusted_hosts[] = db-ip.com
+geolocation_download_from_trusted_hosts[] = ip2location.com
+
+; Session garbage collection on (as on some operating systems, i.e. Debian, it may be off by default)
+session_gc_probability = 1
 
 ; (DEPRECATED) has no effect
 login_cookie_name = matomo_auth
@@ -408,12 +445,6 @@ login_cookie_path =
 ; "remember me" option checked
 login_session_not_remembered_idle_timeout = 3600
 
-; email address that appears as a Sender in the password recovery email
-; if specified, {DOMAIN} will be replaced by the current Matomo domain
-login_password_recovery_email_address = "password-recovery@{DOMAIN}"
-; name that appears as a Sender in the password recovery email
-login_password_recovery_email_name = Matomo
-
 ; email address that appears as a Reply-to in the password recovery email
 ; if specified, {DOMAIN} will be replaced by the current Matomo domain
 login_password_recovery_replyto_email_address = "no-reply@{DOMAIN}"
@@ -421,24 +452,24 @@ login_password_recovery_replyto_email_address = "no-reply@{DOMAIN}"
 login_password_recovery_replyto_email_name = "No-reply"
 
 ; When configured, only users from a configured IP can log into your Matomo. You can define one or multiple
-; IPv4, IPv6, and IP ranges. You may also define hostnames. However, resolving hostnames in each request 
+; IPv4, IPv6, and IP ranges. You may also define hostnames. However, resolving hostnames in each request
 ; may slightly slow down your Matomo.
-; This whitelist also affects API requests unless you disabled it via the setting
-; "login_whitelist_apply_to_reporting_api_requests" below. Note that neither this setting, nor the
-; "login_whitelist_apply_to_reporting_api_requests" restricts authenticated tracking requests (tracking requests
+; This allowlist also affects API requests unless you disabled it via the setting
+; "login_allowlist_apply_to_reporting_api_requests" below. Note that neither this setting, nor the
+; "login_allowlist_apply_to_reporting_api_requests" restricts authenticated tracking requests (tracking requests
 ; with a "token_auth" URL parameter).
 ;
 ; Examples:
-; login_whitelist_ip[] = 204.93.240.*
-; login_whitelist_ip[] = 204.93.177.0/24
-; login_whitelist_ip[] = 199.27.128.0/21
-; login_whitelist_ip[] = 2001:db8::/48
-; login_whitelist_ip[] = matomo.org
+; login_allowlist_ip[] = 204.93.240.*
+; login_allowlist_ip[] = 204.93.177.0/24
+; login_allowlist_ip[] = 199.27.128.0/21
+; login_allowlist_ip[] = 2001:db8::/48
+; login_allowlist_ip[] = matomo.org
 
-; By default, if a whitelisted IP address is specified via "login_whitelist_ip[]", the reporting user interface as
-; well as HTTP Reporting API requests will only work for these whitelisted IPs.
+; By default, if an allowlisted IP address is specified via "login_allowlist_ip[]", the reporting user interface as
+; well as HTTP Reporting API requests will only work for these allowlisted IPs.
 ; Set this setting to "0" to allow HTTP Reporting API requests from any IP address.
-login_whitelist_apply_to_reporting_api_requests = 1
+login_allowlist_apply_to_reporting_api_requests = 1
 
 ; By default when user logs out they are redirected to Matomo "homepage" usually the Login form.
 ; Uncomment the next line to set a URL to redirect the user to after they log out of Matomo.
@@ -451,6 +482,13 @@ enable_framed_pages = 0
 ; Set to 1 to disable the framebuster on Admin pages (a click-jacking countermeasure).
 ; Default is 0 (i.e., bust frames on the Settings forms).
 enable_framed_settings = 0
+
+; Set to 1 to allow using token_auths with write or admin access in iframes that embed Matomo.
+; Note that the token used will be in the URL in the iframe, and thus will be stored in webserver
+; logs and possibly other places. Using write or admin token_auths can be seen as a security risk,
+; though it can be necessary in some use cases. We do not recommend enabling this setting, for more
+; information view the FAQ: https://matomo.org/faq/troubleshooting/faq_147/
+enable_framed_allow_write_admin_token_auth = 0
 
 ; language cookie name for session
 language_cookie_name = matomo_lang
@@ -554,6 +592,7 @@ assume_secure_protocol = 0
 ; load balanced environment, if you have configured failover or if you're just using multiple servers in general.
 ; By enabling this flag we will for example not allow the installation of a plugin via the UI as a plugin would be only
 ; installed on one server or a config one change would be only made on one server instead of all servers.
+; This flag doesn't need to be enabled when the config file is on a shared filesystem such as NFS or EFS.
 multi_server_environment = 0
 
 ; List of proxy headers for client IP addresses
@@ -704,6 +743,10 @@ enable_auto_update = 1
 ; If set to 0 it also disables the "sent plugin update emails" feature in general and the related setting in the UI.
 enable_update_communication = 1
 
+; This option defines the protocols Matomo's Http class is allowed to open.
+; If you may need to download GeoIP updates or other stuff using other protocols like ftp you may need to extend this list.
+allowed_outgoing_protocols = 'http,https'
+
 ; Comma separated list of plugin names for which console commands should be loaded (applies when Matomo is not installed yet)
 always_load_commands_from_plugin=
 
@@ -734,7 +777,7 @@ data_comparison_period_limit = 5
 ; By default Matomo uses a file extracted from the Firefox browser and provided here: https://curl.haxx.se/docs/caextract.html.
 ; The file contains root CAs and is used to determine if the chain of a SSL certificate is valid and it is safe to connect.
 ; Most users will not have to use a custom file here, but if you run your Matomo instance behind a proxy server/firewall that
-; breaks and reencrypts SSL connections you can set your custom file here. 
+; breaks and reencrypts SSL connections you can set your custom file here.
 custom_cacert_pem=
 
 ; Whether or not to send weekly emails to superusers about tracking failures.
@@ -743,7 +786,10 @@ enable_tracking_failures_notification = 1
 
 ; Controls how many months in the past reports are re-archived for plugins that support
 ; doing this (such as CustomReports). Set to 0 to disable the feature. Default is 6.
-rearchive_reports_in_past_last_n_months = last6
+rearchive_reports_in_past_last_n_months = 6
+
+; If set to 1, when rearchiving reports in the past we do not rearchive segment data with those reports. Default is 0.
+rearchive_reports_in_past_exclude_segments = 0
 
 [Tracker]
 
@@ -861,6 +907,12 @@ create_new_visit_when_website_referrer_changes = 0
 ; Whether to force a new visit at midnight for every visitor. Default 1.
 create_new_visit_after_midnight = 1
 
+; Will force the creation of a new visit once a visit had this many actions.
+; Increasing this number can slow down the tracking in Matomo and put more load on the database.
+; Increase this limit if it's expected that you have visits with more than this many actions.
+; Set to 0 or a negative value to allow unlimited actions.
+create_new_visit_after_x_actions = 10000
+
 ; maximum length of a Page Title or a Page URL recorded in the log_action.name table
 page_maximum_length = 1024;
 
@@ -902,6 +954,17 @@ enable_spam_filter = 1
 ; variable "innodb_rollback_on_timeout" is turned off. Only configure if really needed. The lower the value the more tracking
 ; requests may be discarded due to too low lock wait time.
 innodb_lock_wait_timeout = 0
+
+; Allows you to exclude specific requests from being tracked. The definition is similar to segments.
+; The following operands are supported: Equals: `==`, Not equals: `!=`, Contains: `=@`, Not Contains: `!@`, Starts with: `=^`, Ends with: `=$`.
+; The structure is as following: {tracking parameter}{operand}{value to match}.
+; For example "e_c==Media" means that all tracking requests will be excluded where the event category is Media.
+; Multiple exclusions can be configured separated by a comma. The request will be excluded if any expressions matches (not all of them). For example: "e_c==Media,action_name=@privacy".
+; This would also exclude any request from being tracked where the page title contains privacy.
+; All comparisons are performed case insensitve. The value to match on the right side should be URL encoded.
+; For example: "action_name=^foo%2Cbar" would exclude page titles that start with "foo,bar".
+; For a list of tracking parameters you can use on the left side view https://developer.matomo.org/api-reference/tracking-api
+exclude_requests = ""
 
 [Segments]
 ; Reports with segmentation in API requests are processed in real time.
@@ -953,7 +1016,7 @@ host = ; SMTP server address
 type = ; SMTP Auth type. By default: NONE. For example: LOGIN
 username = ; SMTP username
 password = ; SMTP password
-encryption = ; SMTP transport-layer encryption, either 'ssl', 'tls', or empty (i.e., none).
+encryption = ; SMTP transport-layer encryption, either 'none', 'ssl', 'tls', or empty (i.e., auto).
 
 [proxy]
 type = BASIC ; proxy type for outbound/outgoing connections; currently, only BASIC is supported

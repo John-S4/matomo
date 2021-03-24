@@ -751,7 +751,11 @@ abstract class Controller
 
         $pluginManager = Plugin\Manager::getInstance();
         $view->relativePluginWebDirs = (object) $pluginManager->getWebRootDirectoriesForCustomPluginDirs();
-        $view->isMultiSitesEnabled = Manager::getInstance()->isPluginActivated('MultiSites');
+        $view->isMultiSitesEnabled = $pluginManager->isPluginActivated('MultiSites');
+        $view->isSingleSite = Access::doAsSuperUser(function() {
+            $allSites = Request::processRequest('SitesManager.getAllSitesId', [], []);
+            return count($allSites) === 1;
+        });
 
         if (isset($this->site) && is_object($this->site) && $this->site instanceof Site) {
             $view->siteName = $this->site->getName();
@@ -821,12 +825,7 @@ abstract class Controller
             // invalid host, so display warning to user
             $validHosts = Url::getTrustedHostsFromConfig();
             $validHost = $validHosts[0];
-
-            if (!empty($_SERVER['SERVER_NAME'])) {
-                $invalidHost = Common::sanitizeInputValue(Url::getHostFromServerNameVar());
-            } else {
-                $invalidHost = Common::sanitizeInputValue($_SERVER['HTTP_HOST']);
-            }
+            $invalidHost = Common::sanitizeInputValue(Url::getHost(false));
 
             $emailSubject = rawurlencode(Piwik::translate('CoreHome_InjectedHostEmailSubject', $invalidHost));
             $emailBody = rawurlencode(Piwik::translate('CoreHome_InjectedHostEmailBody'));

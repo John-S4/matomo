@@ -240,7 +240,7 @@ class LogAggregator
     {
         try {
             // using DROP TABLE IF EXISTS would not work on a DB reader if the table doesn't exist...
-            $this->getDb()->fetchOne('SELECT 1 FROM ' . $segmentTablePrefixed . ' LIMIT 1');
+            $this->getDb()->fetchOne('SELECT /* WP IGNORE ERROR */ 1 FROM ' . $segmentTablePrefixed . ' LIMIT 1');
             $tableExists = true;
         } catch (\Exception $e) {
             $tableExists = false;
@@ -277,12 +277,13 @@ class LogAggregator
         if ($this->doesSegmentTableExist($table)) {
             return; // no need to create the table, it was already created... better to have a select vs unneeded create table
         }
-	    
+
         $engine = '';
         if (defined('PIWIK_TEST_MODE') && PIWIK_TEST_MODE) {
             $engine = 'ENGINE=MEMORY';
         }
-        $createTableSql = 'CREATE TEMPORARY TABLE ' . $table . ' (idvisit  BIGINT(10) UNSIGNED NOT NULL) ' . $engine;
+        $tempTableIdVisitColumn = 'idvisit  BIGINT(10) UNSIGNED NOT NULL';
+        $createTableSql = 'CREATE TEMPORARY TABLE ' . $table . ' (' . $tempTableIdVisitColumn . ') ' . $engine;
         // we do not insert the data right away using create temporary table ... select ...
         // to avoid metadata lock see eg https://www.percona.com/blog/2018/01/10/why-avoid-create-table-as-select-statement/
 
@@ -292,8 +293,25 @@ class LogAggregator
         } catch (\Exception $e) {
             if ($readerDb->isErrNo($e, \Piwik\Updater\Migration\Db::ERROR_CODE_TABLE_EXISTS)) {
                 return;
+            } elseif ($readerDb->isErrNo($e, \Piwik\Updater\Migration\Db::ERROR_CODE_REQUIRES_PRIMARY_KEY)
+                || $readerDb->isErrNo($e, \Piwik\Updater\Migration\Db::ERROR_CODE_UNABLE_CREATE_TABLE_WITHOUT_PRIMARY_KEY
+                || stripos($e->getMessage(), 'requires a primary key') !== false
+                || stripos($e->getMessage(), 'table without a primary key') !== false)
+            ) {
+                $createTableSql = str_replace($tempTableIdVisitColumn, $tempTableIdVisitColumn . ', PRIMARY KEY (`idvisit`)', $createTableSql);
+
+                try {
+                    $readerDb->query($createTableSql);
+                } catch (\Exception $e) {
+                    if ($readerDb->isErrNo($e, \Piwik\Updater\Migration\Db::ERROR_CODE_TABLE_EXISTS)) {
+                        return;
+                    } else {
+                        throw $e;
+                    }
+                }
+            } else {
+                throw $e;
             }
-            throw $e;
         }
 
         $transactionLevel = new Db\TransactionLevel($readerDb);
@@ -385,11 +403,21 @@ class LogAggregator
             $query['sql'] = 'SELECT /* ' . $this->queryOriginHint . ' */' . substr($query['sql'], strlen($select));
         }
 
+        if (0 === strpos(trim($query['sql']), $select)) {
+            $query['sql'] = trim($query['sql']);
+            $query['sql'] = 'SELECT /* ' . $this->dateStart->toString() . ',' . $this->dateEnd->toString() . ' */' . substr($query['sql'], strlen($select));
+        }
+
+        if ($this->sites && 0 === strpos(trim($query['sql']), $select)) {
+            $query['sql'] = trim($query['sql']);
+            $query['sql'] = 'SELECT /* ' . 'sites ' . implode(',', array_map('intval', $this->sites)) . ' */' . substr($query['sql'], strlen($select));
+        }
+
         if (!$this->getSegment()->isEmpty() && is_array($query) && 0 === strpos(trim($query['sql']), $select)) {
             $query['sql'] = trim($query['sql']);
-            $query['sql'] = 'SELECT /* ' . $this->dateStart->toString() . ',' . $this->dateEnd->toString() . ' sites ' . implode(',', array_map('intval', $this->sites)) . ' segmenthash ' . $this->getSegment()->getHash(). ' */' . substr($query['sql'], strlen($select));
+            $query['sql'] = 'SELECT /* ' . 'segmenthash ' . $this->getSegment()->getHash(). ' */' . substr($query['sql'], strlen($select));
         }
- 
+
         return $query;
     }
 

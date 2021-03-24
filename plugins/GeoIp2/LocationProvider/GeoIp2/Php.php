@@ -38,7 +38,7 @@ class Php extends GeoIp2
      *
      * Each instance is mapped w/ one of the following keys: 'loc', 'isp'
      *
-     * @var array of GeoIP instances
+     * @var Reader[] of GeoIP instances
      */
     private $readerCache = array();
 
@@ -76,6 +76,11 @@ class Php extends GeoIp2
                 }
             }
         }
+    }
+
+    public function __destroy()
+    {
+        $this->clearCachedInstances();
     }
 
     /**
@@ -153,6 +158,7 @@ class Php extends GeoIp2
                         $result[self::ORG_KEY] = $lookupResult->organization;
                         break;
                     case 'GeoLite2-ASN':
+                    case 'DBIP-ASN-Lite (compat=GeoLite2-ASN)':
                         $lookupResult = $ispGeoIp->asn($ip);
                         $result[self::ISP_KEY] = $lookupResult->autonomousSystemOrganization;
                         $result[self::ORG_KEY] = $lookupResult->autonomousSystemOrganization;
@@ -205,6 +211,8 @@ class Php extends GeoIp2
                 return 'GeoIP2-Country';
             case 'DBIP-ISP (compat=Enterprise)':
                 return 'DBIP-ISP';
+            case 'DBIP-ASN-Lite (compat=GeoLite2-ASN)':
+                return 'DBIP-ASN';
             case 'DBIP-Location-ISP (compat=Enterprise)':
                 return 'DBIP-Enterprise';
             case 'GeoLite2-City':
@@ -429,6 +437,7 @@ class Php extends GeoIp2
         $view->geoIPUpdatePeriod = GeoIP2AutoUpdater::getSchedulePeriod();
 
         $view->hasGeoIp2Provider = Manager::getInstance()->isPluginActivated('GeoIp2');
+        $view->isProviderPluginActive = Manager::getInstance()->isPluginActivated('Provider');
 
         $geoIPDatabasesInstalled = $view->hasGeoIp2Provider ? GeoIp2::isDatabaseInstalled() : false;
 
@@ -477,6 +486,22 @@ class Php extends GeoIp2
         $view->dbipLiteDesiredFilename = "DBIP-City.mmdb";
 
         return $view->render();
+    }
+
+    /**
+     * Clears the cached instances and releases the file handles
+     */
+    public function clearCachedInstances()
+    {
+        if (empty($this->readerCache)) {
+            return;
+        }
+
+        foreach ($this->readerCache as $reader) {
+            $reader->close();
+        }
+
+        unset($this->readerCache);
     }
 
     /**

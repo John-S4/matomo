@@ -13,33 +13,15 @@ use Piwik\Columns\MetricsList;
 use Piwik\Piwik;
 use Piwik\Plugin\ArchivedMetric;
 use Piwik\Plugin\ComputedMetric;
-use Piwik\Plugin\Dimension\ActionDimension;
-use Piwik\Tracker\Action;
-use Piwik\Tracker\ActionPageview;
-use Piwik\Tracker\Request;
-use Piwik\Tracker\Visitor;
 
-class TimeTransfer extends ActionDimension
+class TimeTransfer extends Base
 {
-    protected $columnName = 'time_transfer';
-    protected $columnType = 'MEDIUMINT(10) UNSIGNED NULL';
-    protected $type = self::TYPE_DURATION_MS;
+    const COLUMN_TYPE = 'MEDIUMINT(10) UNSIGNED NULL';
+    const COLUMN_NAME = 'time_transfer';
+
+    protected $columnName = self::COLUMN_NAME;
+    protected $columnType = self::COLUMN_TYPE;
     protected $nameSingular = 'PagePerformance_ColumnTimeTransfer';
-
-    public function onNewAction(Request $request, Visitor $visitor, Action $action)
-    {
-        if (!($action instanceof ActionPageview)) {
-            return false;
-        }
-
-        $transferTime = $request->getParam($this->getRequestParam());
-
-        if ($transferTime === -1) {
-            return false;
-        }
-
-        return $transferTime;
-    }
 
     public function getRequestParam()
     {
@@ -58,7 +40,8 @@ class TimeTransfer extends ActionDimension
 
         $metric3 = $dimensionMetricFactory->createMetric('sum(if(%s is null, 0, 1))');
         $metric3->setName('pageviews_with_time_transfer');
-        $metric3->setTranslatedName(Piwik::translate('PagePerformance_ColumnViewsWithTransferTime'));
+        $metric3->setType(self::TYPE_NUMBER);
+        $metric3->setTranslatedName(Piwik::translate('PagePerformance_ColumnViewsWithTimeTransfer'));
         $metricsList->addMetric($metric3);
 
         $metric4 = $dimensionMetricFactory->createMetric(ArchivedMetric::AGGREGATION_MIN);
@@ -67,8 +50,8 @@ class TimeTransfer extends ActionDimension
 
         $metric = $dimensionMetricFactory->createComputedMetric($metric1->getName(), $metric3->getName(), ComputedMetric::AGGREGATION_AVG);
         $metric->setName('avg_time_transfer');
-        $metric->setTranslatedName(Piwik::translate('PagePerformance_ColumnAverageTransferTime'));
-        $metric->setDocumentation(Piwik::translate('PagePerformance_ColumnAverageTransferTimeDocumentation'));
+        $metric->setTranslatedName(Piwik::translate('PagePerformance_ColumnAverageTimeTransfer'));
+        $metric->setDocumentation(Piwik::translate('PagePerformance_ColumnAverageTimeTransferDocumentation'));
         $metricsList->addMetric($metric);
     }
 }

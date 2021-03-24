@@ -21,6 +21,7 @@ use Piwik\DbHelper;
 use Piwik\Period;
 use Piwik\Segment;
 use Piwik\Sequence;
+use Piwik\SettingsServer;
 use Piwik\Site;
 use Psr\Log\LoggerInterface;
 
@@ -52,15 +53,18 @@ class Model
      *
      * @param string $archiveTable
      * @param array $idSites
+     * @param bool $setGroupContentMaxLen for tests only
      * @return array
      * @throws Exception
      */
-    public function getInvalidatedArchiveIdsSafeToDelete($archiveTable)
+    public function getInvalidatedArchiveIdsSafeToDelete($archiveTable, $setGroupContentMaxLen = true)
     {
-        try {
-            Db::get()->query('SET SESSION group_concat_max_len=' . (128 * 1024));
-        } catch (\Exception $ex) {
-            $this->logger->info("Could not set group_concat_max_len MySQL session variable.");
+        if ($setGroupContentMaxLen) {
+            try {
+                Db::get()->query('SET SESSION group_concat_max_len=' . (128 * 1024));
+            } catch (\Exception $ex) {
+                $this->logger->info("Could not set group_concat_max_len MySQL session variable.");
+            }
         }
 
         $sql = "SELECT idsite, date1, date2, period, name,
@@ -81,8 +85,8 @@ class Model
             // and we don't want to delete the latest archive if it is usable
             while (!empty($duplicateArchives)) {
                 $pair = $duplicateArchives[0];
-                if (strpos($pair, '.') === false) {
-                    continue; // see below
+                if ($this->isCutOffGroupConcatResult($pair)) { // can occur if the GROUP_CONCAT value is cut off
+                    break;
                 }
 
                 list($idarchive, $value) = explode('.', $pair);
@@ -97,7 +101,7 @@ class Model
             // if there is more than one archive, the older invalidated ones can be deleted
             if (!empty($duplicateArchives)) {
                 foreach ($duplicateArchives as $pair) {
-                    if (strpos($pair, '.') === false) {
+                    if ($this->isCutOffGroupConcatResult($pair)) {
                         $this->logger->info("GROUP_CONCAT cut off the query result, you may have to purge archives again.");
                         break;
                     }
@@ -131,8 +135,9 @@ class Model
                   FROM `$archiveTable`
                  WHERE idsite IN (" . implode(',', $idSites) . ")";
 
+        $periodCondition = '';
         if (!empty($allPeriodsToInvalidate)) {
-            $sql .= " AND (";
+            $periodCondition .= " AND (";
 
             $isFirst = true;
             /** @var Period $period */
@@ -140,21 +145,22 @@ class Model
                 if ($isFirst) {
                     $isFirst = false;
                 } else {
-                    $sql .= " OR ";
+                    $periodCondition .= " OR ";
                 }
 
                 if ($period->getLabel() == 'range') { // for ranges, we delete all ranges that contain the given date(s)
-                    $sql .= "(period = " . (int)$period->getId()
+                    $periodCondition .= "(period = " . (int)$period->getId()
                         . " AND date2 >= '" . $period->getDateStart()->getDatetime()
                         . "' AND date1 <= '" . $period->getDateEnd()->getDatetime() . "')";
                 } else {
-                    $sql .= "(period = " . (int)$period->getId()
+                    $periodCondition .= "(period = " . (int)$period->getId()
                         . " AND date1 = '" . $period->getDateStart()->getDatetime() . "'"
                         . " AND date2 = '" . $period->getDateEnd()->getDatetime() . "')";
                 }
             }
-            $sql .= ")";
+            $periodCondition .= ")";
         }
+        $sql .= $periodCondition;
 
         if (!empty($name)) {
             if (strpos($name, '.') !== false) {
@@ -175,17 +181,23 @@ class Model
 
         $sql .= " AND $nameCondition";
 
-        $archivesToInvalidate = Db::fetchAll($sql);
-        $idArchives = array_column($archivesToInvalidate, 'idarchive');
+        $idArchives = [];
+        $archivesToInvalidate = [];
 
-        // update each archive as invalidated
-        if (!empty($idArchives)) {
-            $idArchives = array_map('intval', $idArchives);
+        // update each archive as invalidated (but only for full archives or plugin archives, not for partial archives.
+        // DONE_INVALIDATED also implies that an archive is whole and not partial, and we want to avoid that.)
+        if (empty($name)) {
+            $archivesToInvalidate = Db::fetchAll($sql);
+            $idArchives = array_column($archivesToInvalidate, 'idarchive');
 
-            $sql = "UPDATE `$archiveTable` SET `value` = " . ArchiveWriter::DONE_INVALIDATED . " WHERE idarchive IN ("
-                . implode(',', $idArchives) . ") AND $nameCondition";
+            if (!empty($idArchives)) {
+                $idArchives = array_map('intval', $idArchives);
 
-            Db::query($sql);
+                $sql = "UPDATE `$archiveTable` SET `value` = " . ArchiveWriter::DONE_INVALIDATED . " WHERE idarchive IN ("
+                    . implode(',', $idArchives) . ") AND $nameCondition";
+
+                Db::query($sql);
+            }
         }
 
         // we add every archive we need to invalidate + the archives that do not already exist to archive_invalidations.
@@ -201,9 +213,17 @@ class Model
 
         $now = Date::now()->getDatetime();
 
+        $existingInvalidations = $this->getExistingInvalidations($idSites, $periodCondition, $nameCondition);
+
         $dummyArchives = [];
         foreach ($idSites as $idSite) {
-            $siteCreationTime = Date::factory(Site::getCreationDateFor($idSite));
+            try {
+                $siteCreationTime = Site::getCreationDateFor($idSite);
+            } catch (\Exception $ex) {
+                continue;
+            }
+
+            $siteCreationTime = Date::factory($siteCreationTime);
             foreach ($allPeriodsToInvalidate as $period) {
                 if ($period->getLabel() == 'range'
                     && !$forceInvalidateNonexistantRanges
@@ -217,6 +237,12 @@ class Model
 
                 $date1 = $period->getDateStart()->toString();
                 $date2 = $period->getDateEnd()->toString();
+
+                $key = $this->makeExistingInvalidationArrayKey($idSite, $date1, $date2, $period->getId(), $doneFlag, $name);
+                if (!empty($existingInvalidations[$key])) {
+                    continue; // avoid adding duplicates where possible
+                }
+
                 $idArchive = $archivesToCreateInvalidationRowsFor[$idSite][$period->getId()][$date1][$date2] ?? null;
 
                 $dummyArchives[] = [
@@ -232,11 +258,37 @@ class Model
             }
         }
 
-        $fields = ['idarchive', 'name', 'report', 'idsite', 'date1', 'date2', 'period', 'ts_invalidated'];
-
-        Db\BatchInsert::tableInsertBatch(Common::prefixTable('archive_invalidations'), $fields, $dummyArchives);
+        if (!empty($dummyArchives)) {
+            $fields = ['idarchive', 'name', 'report', 'idsite', 'date1', 'date2', 'period', 'ts_invalidated'];
+            Db\BatchInsert::tableInsertBatch(Common::prefixTable('archive_invalidations'), $fields, $dummyArchives);
+        }
 
         return count($idArchives);
+    }
+
+    private function getExistingInvalidations($idSites, $periodCondition, $nameCondition)
+    {
+        $table = Common::prefixTable('archive_invalidations');
+
+        $idSites = array_map('intval', $idSites);
+
+        $sql = "SELECT idsite, date1, date2, period, name, report, COUNT(*) as `count` FROM `$table`
+                 WHERE idsite IN (" . implode(',', $idSites) . ") AND status = " . ArchiveInvalidator::INVALIDATION_STATUS_QUEUED . "
+                       $periodCondition AND $nameCondition
+              GROUP BY idsite, date1, date2, period, name";
+        $rows = Db::fetchAll($sql);
+
+        $invalidations = [];
+        foreach ($rows as $row) {
+            $key = $this->makeExistingInvalidationArrayKey($row['idsite'], $row['date1'], $row['date2'], $row['period'], $row['name'], $row['report']);
+            $invalidations[$key] = $row['count'];
+        }
+        return $invalidations;
+    }
+
+    private function makeExistingInvalidationArrayKey($idSite, $date1, $date2, $period, $name, $report)
+    {
+        return implode('.', [$idSite, $date1, $date2, $period, $name, $report]);
     }
 
     /**
@@ -297,6 +349,10 @@ class Model
 
     public function deleteArchivesWithPeriod($numericTable, $blobTable, $period, $date)
     {
+        if (SettingsServer::isArchivePhpTriggered()) {
+            StaticContainer::get(LoggerInterface::class)->info('deleteArchivesWithPeriod: ' . $numericTable . ' with period = ' . $period . ' and date = ' . $date);
+        }
+
         $query = "DELETE FROM %s WHERE period = ? AND ts_archived < ?";
         $bind  = array($period, $date);
 
@@ -315,26 +371,6 @@ class Model
         }
 
         return $deletedRows;
-    }
-
-    public function getInvalidatedArchiveIdsAsOldOrOlderThan($archive)
-    {
-        $table = ArchiveTableCreator::getNumericTable(Date::factory($archive['date1']));
-        $sql = "SELECT idarchive FROM `$table` WHERE idsite = ? AND period = ? AND date1 = ? AND date2 = ? AND `name` = ? AND `value` IN ("
-            . ArchiveWriter::DONE_INVALIDATED . ") AND idarchive <= ?";
-        $bind = [
-            $archive['idsite'],
-            $archive['period'],
-            $archive['date1'],
-            $archive['date2'],
-            $archive['name'],
-            $archive['idarchive'],
-        ];
-
-        $result = Db::fetchAll($sql, $bind);
-        $result = array_column($result, 'idarchive');
-
-        return $result;
     }
 
     public function deleteArchiveIds($numericTable, $blobTable, $idsToDelete)
@@ -367,14 +403,18 @@ class Model
         $dateEnd = $params->getPeriod()->getDateEnd();
 
         $numericTable = ArchiveTableCreator::getNumericTable($dateStart);
-        $blobTable = ArchiveTableCreator::getBlobTable($dateEnd);
+        $blobTable = ArchiveTableCreator::getBlobTable($dateStart);
 
         $sql = "SELECT idarchive FROM `$numericTable` WHERE idsite = ? AND date1 = ? AND date2 = ? AND period = ? AND name = ? AND ts_archived < ? AND idarchive < ?";
 
-        $idArchives = Db::fetchAll($sql, [$params->getSite()->getId(), $dateStart, $dateEnd, $params->getPeriod()->getId(), $name, $tsArchived, $idArchive]);
+        $idArchives = Db::fetchAll($sql, [$params->getSite()->getId(), $dateStart->getDatetime(), $dateEnd->getDatetime(), $params->getPeriod()->getId(), $name, $tsArchived, $idArchive]);
         $idArchives = array_column($idArchives, 'idarchive');
         if (empty($idArchives)) {
             return;
+        }
+
+        if (SettingsServer::isArchivePhpTriggered()) {
+            StaticContainer::get(LoggerInterface::class)->info('deleteOlderArchives with ' . $params . ', name = ' . $name . ', ts_archived < ' . $tsArchived . ', idarchive < ' . $idArchive);
         }
 
         $this->deleteArchiveIds($numericTable, $blobTable, $idArchives);
@@ -579,7 +619,7 @@ class Model
     private function getDeletedSegmentWhereClause(array $segment)
     {
         $idSite = (int)$segment['enable_only_idsite'];
-        $segmentHash = Segment::getSegmentHash($segment['definition']);
+        $segmentHash = Segment::getSegmentHash(urlencode($segment['definition']));
         // Valid segment hashes are md5 strings - just confirm that it is so it's safe for SQL injection
         if (!ctype_xdigit($segmentHash)) {
             throw new Exception($segment . ' expected to be an md5 hash');
@@ -626,7 +666,7 @@ class Model
         $table = Common::prefixTable('archive_invalidations');
 
         // set archive value to in progress if not set already
-        $statement = Db::query("UPDATE `$table` SET `status` = ? WHERE idinvalidation = ? AND status = ?", [
+        $statement = Db::query("UPDATE `$table` SET `status` = ?, ts_started = NOW() WHERE idinvalidation = ? AND status = ?", [
             ArchiveInvalidator::INVALIDATION_STATUS_IN_PROGRESS,
             $invalidation['idinvalidation'],
             ArchiveInvalidator::INVALIDATION_STATUS_QUEUED,
@@ -646,25 +686,74 @@ class Model
             return false; // we couldn't claim the lock, archive is in progress
         }
 
+        // remove similar invalidations w/ lesser idinvalidation values
+        $bind = [
+            $invalidation['idsite'],
+            $invalidation['period'],
+            $invalidation['date1'],
+            $invalidation['date2'],
+            $invalidation['name'],
+            ArchiveInvalidator::INVALIDATION_STATUS_IN_PROGRESS,
+        ];
+
+        if (empty($invalidation['report'])) {
+            $reportClause = "(report IS NULL OR report = '')";
+        } else {
+            $reportClause = "report = ?";
+            $bind[] = $invalidation['report'];
+        }
+
+        $sql = "DELETE FROM " . Common::prefixTable('archive_invalidations') . " WHERE idinvalidation < ? AND idsite = ? AND "
+            . "date1 = ? AND date2 = ? AND `period` = ? AND `name` = ? AND $reportClause";
+        Db::query($sql, $bind);
+
         return true;
+    }
+
+    public function isSimilarArchiveInProgress($invalidation)
+    {
+        $table = Common::prefixTable('archive_invalidations');
+
+        $bind = [
+            $invalidation['idsite'],
+            $invalidation['period'],
+            $invalidation['date1'],
+            $invalidation['date2'],
+            $invalidation['name'],
+            ArchiveInvalidator::INVALIDATION_STATUS_IN_PROGRESS,
+        ];
+
+        if (empty($invalidation['report'])) {
+            $reportClause = "(report IS NULL OR report = '')";
+        } else {
+            $reportClause = "report = ?";
+            $bind[] = $invalidation['report'];
+        }
+
+        $sql = "SELECT idinvalidation FROM `$table` WHERE idsite = ? AND `period` = ? AND date1 = ? AND date2 = ? AND `name` = ? AND `status` = ? AND ts_started IS NOT NULL AND $reportClause LIMIT 1";
+        $result = Db::fetchOne($sql, $bind);
+
+        return !empty($result);
     }
 
     /**
      * Gets the next invalidated archive that should be archived in a table.
      *
-     * @param string[] $tables
-     * @param int $count
+     * @param int $idSite
+     * @param string $archivingStartTime
+     * @param int[]|null $idInvalidationsToExclude
      * @param bool $useLimit Whether to limit the result set to one result or not. Used in tests only.
      */
-    public function getNextInvalidatedArchive($idSite, $idInvalidationsToExclude = null, $useLimit = true)
+    public function getNextInvalidatedArchive($idSite, $archivingStartTime, $idInvalidationsToExclude = null, $useLimit = true)
     {
         $table = Common::prefixTable('archive_invalidations');
-        $sql = "SELECT idinvalidation, idarchive, idsite, date1, date2, period, `name`, report
+        $sql = "SELECT idinvalidation, idarchive, idsite, date1, date2, period, `name`, report, ts_invalidated
                   FROM `$table`
-                 WHERE idsite = ? AND status != ?";
+                 WHERE idsite = ? AND status != ? AND ts_invalidated <= ?";
         $bind = [
             $idSite,
             ArchiveInvalidator::INVALIDATION_STATUS_IN_PROGRESS,
+            $archivingStartTime,
         ];
 
         if (!empty($idInvalidationsToExclude)) {
@@ -672,7 +761,9 @@ class Model
             $sql .= " AND idinvalidation NOT IN (" . implode(',', $idInvalidationsToExclude) . ')';
         }
 
-        $sql .= " ORDER BY date1 DESC, period ASC, CHAR_LENGTH(name) ASC, idinvalidation ASC";
+        // NOTE: order here is very important to ensure we process lower period archives first, and general 'all' archives before
+        // segment archives, and so we use the latest idinvalidation
+        $sql .= " ORDER BY date1 DESC, period ASC, CHAR_LENGTH(name) ASC, idinvalidation DESC";
 
         if ($useLimit) {
             $sql .= " LIMIT 1";
@@ -693,6 +784,50 @@ class Model
         Db::query($sql);
     }
 
+    public function removeInvalidationsLike($idSite, $start)
+    {
+        $idSitesClause = $this->getRemoveInvalidationsIdSitesClause($idSite);
+
+        $table = Common::prefixTable('archive_invalidations');
+        $sql = "DELETE FROM `$table` WHERE $idSitesClause `name` LIKE ?";
+
+        Db::query($sql, ['done%.' . str_replace('_', "\\_", $start)]);
+    }
+
+    public function removeInvalidations($idSite, $plugin, $report)
+    {
+        $idSitesClause = $this->getRemoveInvalidationsIdSitesClause($idSite);
+
+        $table = Common::prefixTable('archive_invalidations');
+        $sql = "DELETE FROM `$table` WHERE $idSitesClause `name` LIKE ? AND report = ?";
+
+        Db::query($sql, ['done%.' . str_replace('_', "\\_", $plugin), $report]);
+    }
+
+    public function isArchiveAlreadyInProgress($invalidatedArchive)
+    {
+        $table = Common::prefixTable('archive_invalidations');
+
+        $bind = [
+            $invalidatedArchive['idsite'],
+            $invalidatedArchive['date1'],
+            $invalidatedArchive['date2'],
+            $invalidatedArchive['period'],
+            $invalidatedArchive['name'],
+        ];
+
+        $reportClause = "(report = '' OR report IS NULL)";
+        if (!empty($invalidatedArchive['report'])) {
+            $reportClause = "report = ?";
+            $bind[] = $invalidatedArchive['report'];
+        }
+
+        $sql = "SELECT MAX(idinvalidation) FROM `$table` WHERE idsite = ? AND date1 = ? AND date2 = ? AND `period` = ? AND `name` = ? AND status = 1 AND $reportClause";
+
+        $inProgressInvalidation = Db::fetchOne($sql, $bind);
+        return $inProgressInvalidation;
+    }
+  
     /**
      * Returns true if there is an archive that exists that can be used when aggregating an archive for $period.
      *
@@ -707,9 +842,15 @@ class Model
         while ($date->isEarlier($period->getDateEnd()->addPeriod(1, 'month'))) {
             $archiveTable = ArchiveTableCreator::getNumericTable($date);
 
+            // we look for any archive that can be used to compute this one. this includes invalidated archives, since it is possible
+            // under certain circumstances for them to exist, when archiving a higher period that includes them. the main example being
+            // the GoogleAnalyticsImporter which disallows the recomputation of invalidated archives for imported data, since that would
+            // essentially get rid of the imported data.
+            $usableDoneFlags = [ArchiveWriter::DONE_OK, ArchiveWriter::DONE_INVALIDATED, ArchiveWriter::DONE_PARTIAL, ArchiveWriter::DONE_OK_TEMPORARY];
+
             $sql = "SELECT idarchive
                   FROM `$archiveTable`
-                 WHERE idsite = ? AND date1 >= ? AND date2 <= ? AND period < ? AND `name` LIKE 'done%' AND `value` = " . ArchiveWriter::DONE_OK . "
+                 WHERE idsite = ? AND date1 >= ? AND date2 <= ? AND period < ? AND `name` LIKE 'done%' AND `value` IN (" . implode(', ', $usableDoneFlags) . ")
                  LIMIT 1";
             $bind = [$idSite, $period->getDateStart()->getDatetime(), $period->getDateEnd()->getDatetime(), $period->getId()];
 
@@ -721,5 +862,64 @@ class Model
             $date = $date->addPeriod(1, 'month'); // move to next archive table
         }
         return false;
+    }
+
+    public function deleteInvalidationsForSites(array $idSites)
+    {
+        $idSites = array_map('intval', $idSites);
+
+        $table = Common::prefixTable('archive_invalidations');
+        $sql = "DELETE FROM `$table` WHERE idsite IN (" . implode(',', $idSites) . ")";
+
+        Db::query($sql);
+    }
+
+    public function deleteInvalidationsForDeletedSites()
+    {
+        $siteTable = Common::prefixTable('site');
+        $table = Common::prefixTable('archive_invalidations');
+        $sql = "DELETE a FROM `$table` a LEFT JOIN `$siteTable` s ON a.idsite = s.idsite WHERE s.idsite IS NULL";
+        Db::query($sql);
+    }
+
+    private function getRemoveInvalidationsIdSitesClause($idSite)
+    {
+        if ($idSite === 'all') {
+            return '';
+        }
+
+        $idSites = is_array($idSite) ? $idSite : [$idSite];
+        $idSites = array_map('intval', $idSites);
+        $idSitesStr = implode(',', $idSites);
+
+        return "idsite IN ($idSitesStr) AND";
+    }
+
+    public function releaseInProgressInvalidation($idinvalidation)
+    {
+        $table = Common::prefixTable('archive_invalidations');
+        $sql = "UPDATE $table SET status = " . ArchiveInvalidator::INVALIDATION_STATUS_QUEUED . ", ts_started = NULL WHERE idinvalidation = ?";
+        Db::query($sql, [$idinvalidation]);
+    }
+
+    public function resetFailedArchivingJobs()
+    {
+        $table = Common::prefixTable('archive_invalidations');
+        $sql = "UPDATE $table SET status = ? WHERE status = ? AND (ts_started IS NULL OR ts_started < ?)";
+
+        $bind = [
+            ArchiveInvalidator::INVALIDATION_STATUS_QUEUED,
+            ArchiveInvalidator::INVALIDATION_STATUS_IN_PROGRESS,
+            Date::now()->subDay(1)->getDatetime(),
+        ];
+
+        $query = Db::query($sql, $bind);
+        return $query->rowCount();
+    }
+
+    private function isCutOffGroupConcatResult($pair)
+    {
+        $position = strpos($pair, '.');
+        return $position === false || $position === strlen($pair) - 1;
     }
 }

@@ -8,11 +8,15 @@
 
 namespace Piwik\CronArchive;
 
+use Piwik\Archive;
 use Piwik\Container\StaticContainer;
 use Piwik\Date;
+use Piwik\Period\Factory;
 use Piwik\Period\Factory as PeriodFactory;
 use Piwik\Piwik;
 use Piwik\Plugins\SegmentEditor\Model as SegmentEditorModel;
+use Piwik\Segment;
+use Piwik\Site;
 use Psr\Log\LoggerInterface;
 
 class ArchiveFilter
@@ -42,6 +46,20 @@ class ArchiveFilter
      */
     private $periodIdsToLabels;
 
+    /**
+     * If enabled, segments will be only archived for yesterday, but not today. If the segment was created recently,
+     * then it will still be archived for today and the setting will be ignored for this segment.
+     * @var bool
+     */
+    private $skipSegmentsForToday = false;
+
+    /**
+     * If enabled, the only invalidations that will be processed are for the specific plugin and report specified
+     * here. Must be in the format "MyPlugin.myReport".
+     * @var string|null
+     */
+    private $forceReport = null;
+
     public function __construct()
     {
         $this->setRestrictToPeriods('');
@@ -67,6 +85,15 @@ class ArchiveFilter
             }
         }
 
+        if (!empty($this->skipSegmentsForToday)) {
+            $site = new Site($archive['idsite']);
+            $period = Factory::build($this->periodIdsToLabels[$archive['period']], $archive['date1']);
+            $segment = new Segment($segment, [$archive['idsite']]);
+            if (Archive::shouldSkipArchiveIfSkippingSegmentArchiveForToday($site, $period, $segment)) {
+                return "skipping segment archives for today";
+            }
+        }
+
         if (!empty($this->restrictToDateRange)
             && ($this->restrictToDateRange[0]->isLater(Date::factory($archive['date2']))
                 || $this->restrictToDateRange[1]->isEarlier(Date::factory($archive['date1']))
@@ -82,6 +109,14 @@ class ArchiveFilter
             return "period is not specified in --force-periods";
         }
 
+        if (!empty($this->forceReport)
+            && (empty($archive['plugin'])
+                || empty($archive['report'])
+                || $archive['plugin'] . '.' . $archive['report'] != $this->forceReport)
+        ) {
+            return "report is not the same as value specified in --force-report";
+        }
+
         return false;
     }
 
@@ -89,6 +124,7 @@ class ArchiveFilter
     {
         $this->logForcedSegmentInfo($logger);
         $this->logForcedPeriodInfo($logger);
+        $this->logSkipSegmentInfo($logger);
     }
 
     private function logForcedSegmentInfo(LoggerInterface $logger)
@@ -190,12 +226,29 @@ class ArchiveFilter
         $this->segmentsToForce = $segments;
     }
 
+    public function setSkipSegmentsForToday($skipSegmentsForToday)
+    {
+        $this->skipSegmentsForToday = $skipSegmentsForToday;
+    }
+
+    /**
+     * @return bool
+     */
+    public function isSkipSegmentsForToday(): bool
+    {
+        return $this->skipSegmentsForToday;
+    }
+
+    public function setForceReport($forceReport)
+    {
+        $this->forceReport = $forceReport;
+    }
+
     /**
      * @return array
      */
     private function getPeriodsToProcess()
     {
-
         return $this->restrictToPeriods;
     }
 
@@ -228,5 +281,12 @@ class ArchiveFilter
         $this->restrictToPeriods = $restrictToPeriods ?: [];
         $this->restrictToPeriods = array_intersect($this->restrictToPeriods, $this->getDefaultPeriodsToProcess());
         $this->restrictToPeriods = array_intersect($this->restrictToPeriods, PeriodFactory::getPeriodsEnabledForAPI());
+    }
+
+    private function logSkipSegmentInfo(LoggerInterface $logger)
+    {
+        if ($this->skipSegmentsForToday) {
+            $logger->info('Will skip segments archiving for today unless they were created recently');
+        }
     }
 }

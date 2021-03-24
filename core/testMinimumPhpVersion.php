@@ -49,9 +49,9 @@ if ($minimumPhpInvalid) {
     }
 
     if (!function_exists('json_encode')) {
-        $piwik_errorMessage .= "<p><strong>Matomo requires the php5-json extension which provides the functions <code>json_encode()</code> and <code>json_decode()</code></strong></p>
-					<p>It appears your PHP has not yet installed the php5-json extension.
-					To use Matomo, please ask your web host to install php5-json or install it yourself, for example on debian system: <code>sudo apt-get install php5-json</code>. <br/>Then restart your webserver and refresh this page.</p>";
+        $piwik_errorMessage .= "<p><strong>Matomo requires the php-json extension which provides the functions <code>json_encode()</code> and <code>json_decode()</code></strong></p>
+					<p>It appears your PHP has not yet installed the php-json extension.
+					To use Matomo, please ask your web host to install php-json or install it yourself, for example on debian system: <code>sudo apt-get install php-json</code>. <br/>Then restart your webserver and refresh this page.</p>";
     }
 
     if (!file_exists(PIWIK_VENDOR_PATH . '/autoload.php')) {
@@ -92,6 +92,7 @@ if (!function_exists('Piwik_GetErrorMessagePage')) {
         }
 
         $bool = (defined('PIWIK_PRINT_ERROR_BACKTRACE') && PIWIK_PRINT_ERROR_BACKTRACE)
+                || !empty($GLOBALS['PIWIK_PRINT_ERROR_BACKTRACE'])
                 || !empty($GLOBALS['PIWIK_TRACKER_DEBUG']);
 
         return $bool;

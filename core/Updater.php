@@ -25,6 +25,7 @@ class Updater
 {
     const INDEX_CURRENT_VERSION = 0;
     const INDEX_NEW_VERSION = 1;
+    const OPTION_KEY_MATOMO_UPDATE_HISTORY = 'MatomoUpdateHistory';
 
     private $pathUpdateFileCore;
     private $pathUpdateFilePlugins;
@@ -330,7 +331,7 @@ class Updater
         $this->markComponentSuccessfullyUpdated($componentName, $updatedVersion);
 
         $this->executeListenerHook('onComponentUpdateFinished', array($componentName, $updatedVersion, $warningMessages));
-        ServerFilesGenerator::createHtAccessFiles();
+        ServerFilesGenerator::createFilesForSecurity();
         return $warningMessages;
     }
 
@@ -459,6 +460,22 @@ class Updater
         $deactivatedPlugins = array();
         $coreError = false;
 
+        try {
+            $history = Option::get(self::OPTION_KEY_MATOMO_UPDATE_HISTORY);
+            $history = explode(',', (string) $history);
+            $previousVersion = Option::get(self::getNameInOptionTable('core'));
+
+            if (!empty($previousVersion) && !in_array($previousVersion, $history, true)) {
+                // this allows us to see which versions of matomo the user was using before this update so we better understand
+                // which version maybe regressed something
+                array_unshift( $history, $previousVersion );
+                $history = array_slice( $history, 0, 6 ); // lets keep only the last 6 versions
+                Option::set(self::OPTION_KEY_MATOMO_UPDATE_HISTORY, implode(',', $history));
+            }
+        } catch (\Exception $e) {
+            // case when the option table is not yet created (before 0.2.10)
+        }
+
         if (!empty($componentsWithUpdateFile)) {
             $currentAccess      = Access::getInstance();
             $hasSuperUserAccess = $currentAccess->hasSuperUserAccess();
@@ -466,6 +483,8 @@ class Updater
             if (!$hasSuperUserAccess) {
                 $currentAccess->setSuperUserAccess(true);
             }
+
+            $pluginManager = \Piwik\Plugin\Manager::getInstance();
 
             // if error in any core update, show message + help message + EXIT
             // if errors in any plugins updates, show them on screen, disable plugins that errored + CONTINUE
@@ -479,8 +498,11 @@ class Updater
                     if ($name == 'core') {
                         $coreError = true;
                         break;
-                    } elseif (\Piwik\Plugin\Manager::getInstance()->isPluginActivated($name)) {
-                        \Piwik\Plugin\Manager::getInstance()->deactivatePlugin($name);
+                    } elseif ($pluginManager->isPluginActivated($name) && $pluginManager->isPluginBundledWithCore($name)) {
+                        $coreError = true;
+                        break;
+                    } elseif ($pluginManager->isPluginActivated($name)) {
+                        $pluginManager->deactivatePlugin($name);
                         $deactivatedPlugins[] = $name;
                     }
                 }
@@ -492,7 +514,7 @@ class Updater
         }
 
         Filesystem::deleteAllCacheOnUpdate();
-        ServerFilesGenerator::createHtAccessFiles();
+        ServerFilesGenerator::createFilesForSecurity();
 
         $result = array(
             'warnings'  => $warnings,

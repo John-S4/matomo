@@ -16,6 +16,7 @@ use Piwik\CacheId;
 use Piwik\Common;
 use Piwik\Config;
 use Piwik\Container\StaticContainer;
+use Piwik\CronArchive\SegmentArchiving;
 use Piwik\DataAccess\ArchiveSelector;
 use Piwik\Notification;
 use Piwik\Piwik;
@@ -28,6 +29,8 @@ use Piwik\Site;
 use Piwik\Period;
 use Piwik\Url;
 use Piwik\View;
+use Piwik\Plugins\UsersManager\API as UsersManagerApi;
+use Piwik\Date;
 
 /**
  */
@@ -51,7 +54,8 @@ class SegmentEditor extends \Piwik\Plugin
             'Visualization.onNoData'                     => 'onNoData',
             'Archive.noArchivedData'                     => 'onNoArchiveData',
             'Db.getTablesInstalled'                      => 'getTablesInstalled',
-            'SitesManager.deleteSite.end'                => 'onDeleteSite'
+            'SitesManager.deleteSite.end'                => 'onDeleteSite',
+            'UsersManager.deleteUser'                    => 'onDeleteUser',
         );
     }
 
@@ -80,7 +84,25 @@ class SegmentEditor extends \Piwik\Plugin
         $storedSegments = StaticContainer::get('Piwik\Plugins\SegmentEditor\Services\StoredSegmentService');
         $segments = $storedSegments->getAllSegmentsAndIgnoreVisibility();
         $numSegments = count($segments);
-        $systemSummary[] = new SystemSummary\Item($key = 'segments', Piwik::translate('CoreHome_SystemSummaryNSegments', $numSegments), $value = null, $url = null, $icon = 'icon-segment', $order = 6);
+
+        if (Rules::isBrowserArchivingAvailableForSegments()) {
+            $numAutoArchiveSegments = 0;
+            $numRealTimeSegments = 0;
+            foreach ($segments as $segment) {
+                $autoArchive = (int)$segment['auto_archive'];
+                if (!empty($autoArchive)) {
+                    ++$numAutoArchiveSegments;
+                } else {
+                    ++$numRealTimeSegments;
+                }
+            }
+
+            $message = Piwik::translate('CoreHome_SystemSummaryNSegmentsWithBreakdown', [$numSegments, $numAutoArchiveSegments, $numRealTimeSegments]);
+        } else {
+            $message = Piwik::translate('CoreHome_SystemSummaryNSegments', [$numSegments]);
+        }
+
+        $systemSummary[] = new SystemSummary\Item($key = 'segments', $message, $value = null, $url = null, $icon = 'icon-segment', $order = 6);
     }
 
     function getSegmentEditorHtml(&$out)
@@ -104,7 +126,20 @@ class SegmentEditor extends \Piwik\Plugin
     public function getKnownSegmentsToArchiveForSite(&$segments, $idSite)
     {
         $model = new Model();
-        $segmentToAutoArchive = $model->getSegmentsToAutoArchive($idSite);
+        $segmentToAutoArchive = $model->getAllSegmentsAndIgnoreVisibility();
+
+        $forceAutoArchive = SegmentArchiving::getShouldForceArchiveAllSegments();
+        foreach ($segmentToAutoArchive as $index => $segmentInfo) {
+            if (!SegmentArchiving::isSegmentForSite($segmentInfo, $idSite)) {
+                unset($segmentToAutoArchive[$index]);
+            }
+
+            if (!$forceAutoArchive
+                && empty($segmentInfo['auto_archive'])
+            ) {
+                unset($segmentToAutoArchive[$index]);
+            }
+        }
 
         foreach ($segmentToAutoArchive as $segmentInfo) {
             $segments[] = $segmentInfo['definition'];
@@ -325,5 +360,39 @@ class SegmentEditor extends \Piwik\Plugin
             $cache->save($cacheKey, $segments);
         }
         return $segments;
+    }
+
+    public function onDeleteUser($userLogin)
+    {
+        $this->transferAllUserSegmentsToSuperUser($userLogin);
+    }
+
+    public function transferAllUserSegmentsToSuperUser($userLogin)
+    {
+        $model = new Model();
+        $updatedAt = Date::factory('now')->toString('Y-m-d H:i:s');
+
+        $superUsers = UsersManagerApi::getInstance()->getUsersHavingSuperUserAccess();
+        $superUserLogin = false;
+
+        foreach ($superUsers as $superUser) {
+            if ($superUser['login'] !== $userLogin) {
+                $superUserLogin = $superUser['login'];
+                break;
+            }
+        }
+
+        if (!$superUserLogin) {
+            return;
+        }
+
+        foreach ($model->getAllSegments($userLogin) as $segment) {
+            if ($segment['login'] === $userLogin) {
+                $model->updateSegment($segment['idsegment'], array(
+                    'login' => $superUserLogin,
+                    'ts_last_edit' => $updatedAt
+                ));
+            }
+        }
     }
 }

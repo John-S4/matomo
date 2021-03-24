@@ -168,6 +168,14 @@ class Archive implements ArchiveQuery
     private static $cache;
 
     /**
+     * If true, this Archive instance will not launch the archiving process, even if the current request
+     * is authorized to.
+     *
+     * @var bool
+     */
+    private $forceFetchingWithoutLaunchingArchiving;
+
+    /**
      * @param Parameters $params
      * @param bool $forceIndexedBySite Whether to force index the result of a query by site ID.
      * @param bool $forceIndexedByDate Whether to force index the result of a query by period.
@@ -232,6 +240,14 @@ class Archive implements ArchiveQuery
     {
         return StaticContainer::get(ArchiveQueryFactory::class)->factory($segment, $periods, $idSites, $idSiteIsAll,
             $isMultipleDate);
+    }
+
+    public static function shouldSkipArchiveIfSkippingSegmentArchiveForToday(Site $site, Period $period, Segment $segment)
+    {
+        $now = Date::factory('now', $site->getTimezone());
+        return $period->getLabel() === 'day'
+            && !$segment->isEmpty()
+            && $period->getDateStart()->toString() === $now->toString();
     }
 
     /**
@@ -549,7 +565,9 @@ class Archive implements ArchiveQuery
 
         // cache id archives for plugins we haven't processed yet
         if (!empty($archiveGroups)) {
-            if (!Rules::isArchivingDisabledFor($this->params->getIdSites(), $this->params->getSegment(), $this->getPeriodLabel())) {
+            if (!Rules::isArchivingDisabledFor($this->params->getIdSites(), $this->params->getSegment(), $this->getPeriodLabel())
+                && !$this->forceFetchingWithoutLaunchingArchiving
+            ) {
                 $this->cacheArchiveIdsAfterLaunching($archiveGroups, $plugins);
             } else {
                 $this->cacheArchiveIdsWithoutLaunching($plugins);
@@ -580,10 +598,8 @@ class Archive implements ArchiveQuery
             foreach ($this->params->getIdSites() as $idSite) {
                 $site = new Site($idSite);
 
-                if ($period->getLabel() === 'day'
-                    && !$this->params->getSegment()->isEmpty()
-                    && Common::getRequestVar('skipArchiveSegmentToday', 0, 'int')
-                    && $period->getDateStart()->toString() === Date::factory('now', $site->getTimezone())->toString()
+                if (Common::getRequestVar('skipArchiveSegmentToday', 0, 'int')
+                    && self::shouldSkipArchiveIfSkippingSegmentArchiveForToday($site, $period, $this->params->getSegment())
                 ) {
                     Log::debug("Skipping archive %s for %s as segment today is disabled", $period->getLabel(), $period->getPrettyString());
                     continue;
@@ -845,5 +861,10 @@ class Archive implements ArchiveQuery
     public static function clearStaticCache()
     {
         self::$cache = null;
+    }
+
+    public function forceFetchingWithoutLaunchingArchiving()
+    {
+        $this->forceFetchingWithoutLaunchingArchiving = true;
     }
 }

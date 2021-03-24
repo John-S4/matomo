@@ -13,33 +13,15 @@ use Piwik\Columns\MetricsList;
 use Piwik\Piwik;
 use Piwik\Plugin\ArchivedMetric;
 use Piwik\Plugin\ComputedMetric;
-use Piwik\Plugin\Dimension\ActionDimension;
-use Piwik\Tracker\Action;
-use Piwik\Tracker\ActionPageview;
-use Piwik\Tracker\Request;
-use Piwik\Tracker\Visitor;
 
-class TimeOnLoad extends ActionDimension
+class TimeOnLoad extends Base
 {
-    protected $columnName = 'time_on_load';
-    protected $columnType = 'MEDIUMINT(10) UNSIGNED NULL';
-    protected $type = self::TYPE_DURATION_MS;
+    const COLUMN_TYPE = 'MEDIUMINT(10) UNSIGNED NULL';
+    const COLUMN_NAME = 'time_on_load';
+
+    protected $columnName = self::COLUMN_NAME;
+    protected $columnType = self::COLUMN_TYPE;
     protected $nameSingular = 'PagePerformance_ColumnTimeOnLoad';
-
-    public function onNewAction(Request $request, Visitor $visitor, Action $action)
-    {
-        if (!($action instanceof ActionPageview)) {
-            return false;
-        }
-
-        $timeOnLoad = $request->getParam($this->getRequestParam());
-
-        if ($timeOnLoad === -1) {
-            return null;
-        }
-
-        return $timeOnLoad;
-    }
 
     public function getRequestParam()
     {
@@ -58,7 +40,8 @@ class TimeOnLoad extends ActionDimension
 
         $metric3 = $dimensionMetricFactory->createMetric('sum(if(%s is null, 0, 1))');
         $metric3->setName('pageviews_with_time_on_load');
-        $metric3->setTranslatedName(Piwik::translate('PagePerformance_ColumnViewsWithOnLoadTime'));
+        $metric3->setType(self::TYPE_NUMBER);
+        $metric3->setTranslatedName(Piwik::translate('PagePerformance_ColumnViewsWithTimeOnLoad'));
         $metricsList->addMetric($metric3);
 
         $metric4 = $dimensionMetricFactory->createMetric(ArchivedMetric::AGGREGATION_MIN);
@@ -67,8 +50,8 @@ class TimeOnLoad extends ActionDimension
 
         $metric = $dimensionMetricFactory->createComputedMetric($metric1->getName(), $metric3->getName(), ComputedMetric::AGGREGATION_AVG);
         $metric->setName('avg_time_on_load');
-        $metric->setTranslatedName(Piwik::translate('PagePerformance_ColumnAverageOnLoadTime'));
-        $metric->setDocumentation(Piwik::translate('PagePerformance_ColumnAverageOnLoadTimeDocumentation'));
+        $metric->setTranslatedName(Piwik::translate('PagePerformance_ColumnAverageTimeOnLoad'));
+        $metric->setDocumentation(Piwik::translate('PagePerformance_ColumnAverageTimeOnLoadDocumentation'));
         $metricsList->addMetric($metric);
     }
 }

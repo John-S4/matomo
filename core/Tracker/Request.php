@@ -18,8 +18,10 @@ use Piwik\Exception\UnexpectedWebsiteFoundException;
 use Piwik\IP;
 use Matomo\Network\IPUtils;
 use Piwik\Piwik;
+use Piwik\Plugins\PrivacyManager\PrivacyManager;
 use Piwik\Plugins\UsersManager\UsersManager;
 use Piwik\ProxyHttp;
+use Piwik\Segment\SegmentExpression;
 use Piwik\Tracker;
 use Piwik\Cache as PiwikCache;
 
@@ -234,6 +236,72 @@ class Request
         return false;
     }
 
+    public function isRequestExcluded()
+    {
+        $config = Config::getInstance();
+        $tracker = $config->Tracker;
+
+        if (!empty($tracker['exclude_requests'])) {
+            $excludedRequests = explode(',', $tracker['exclude_requests']);
+            $pattern = '/^(.+?)('.SegmentExpression::MATCH_EQUAL.'|'
+                .SegmentExpression::MATCH_NOT_EQUAL.'|'
+                .SegmentExpression::MATCH_CONTAINS.'|'
+                .SegmentExpression::MATCH_DOES_NOT_CONTAIN.'|'
+                .preg_quote(SegmentExpression::MATCH_STARTS_WITH).'|'
+                .preg_quote(SegmentExpression::MATCH_ENDS_WITH)
+                .'){1}(.*)/';
+            foreach ($excludedRequests as $excludedRequest) {
+                $match = preg_match($pattern, $excludedRequest, $matches);
+
+                if (!empty($match)) {
+                    $leftMember = $matches[1];
+                    $operation = $matches[2];
+                    if (!isset($matches[3])) {
+                        $valueRightMember = '';
+                    } else {
+                        $valueRightMember = urldecode($matches[3]);
+                    }
+                    $actual = Common::getRequestVar($leftMember, '', 'string', $this->params);
+                    $actual = Common::mb_strtolower($actual);
+                    $valueRightMember = Common::mb_strtolower($valueRightMember);
+                    switch ($operation) {
+                        case SegmentExpression::MATCH_EQUAL:
+                            if ($actual === $valueRightMember) {
+                                return true;
+                            }
+                            break;
+                        case SegmentExpression::MATCH_NOT_EQUAL:
+                            if ($actual !== $valueRightMember) {
+                                return true;
+                            }
+                            break;
+                        case SegmentExpression::MATCH_CONTAINS:
+                            if (stripos($actual, $valueRightMember) !== false) {
+                                return true;
+                            }
+                            break;
+                        case SegmentExpression::MATCH_DOES_NOT_CONTAIN:
+                            if (stripos($actual, $valueRightMember) === false) {
+                                return true;
+                            }
+                            break;
+                        case SegmentExpression::MATCH_STARTS_WITH:
+                            if (stripos($actual, $valueRightMember) === 0) {
+                                return true;
+                            }
+                            break;
+                        case SegmentExpression::MATCH_ENDS_WITH:
+                            if (Common::stringEndsWith($actual, $valueRightMember)) {
+                                return true;
+                            }
+                            break;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
     /**
      * Returns the language the visitor is viewing.
      *
@@ -331,6 +399,7 @@ class Request
             // some visitor attributes can be overwritten
             'cip'          => array('', 'string'),
             'cdt'          => array('', 'string'),
+            'cdo'          => array('', 'int'),
             'cid'          => array('', 'string'),
             'uid'          => array('', 'string'),
 
@@ -355,6 +424,10 @@ class Request
             'c_n'          => array('', 'string'),
             'c_t'          => array('', 'string'),
             'c_i'          => array('', 'string'),
+
+            // custom action request. Recommended when a plugin declares its own action handler/requestprocessor
+            // refs https://github.com/matomo-org/matomo/issues/16569
+            'ca'          => array(0, 'int'),
         );
 
         if (isset($this->paramsCache[$name])) {
@@ -417,11 +490,16 @@ class Request
 
     protected function getCustomTimestamp()
     {
-        if (!$this->hasParam('cdt')) {
+        if (!$this->hasParam('cdt') && !$this->hasParam('cdo')) {
             return false;
         }
 
         $cdt = $this->getParam('cdt');
+        $cdo = $this->getParam('cdo');
+
+        if (empty($cdt) && $cdo) {
+            $cdt = $this->timestamp;
+        }
 
         if (empty($cdt)) {
             return false;
@@ -429,6 +507,10 @@ class Request
 
         if (!is_numeric($cdt)) {
             $cdt = strtotime($cdt);
+        }
+
+        if (!empty($cdo)) {
+            $cdt = $cdt - abs($cdo);
         }
 
         if (!$this->isTimestampValid($cdt, $this->timestamp)) {
@@ -461,7 +543,7 @@ class Request
             }
         }
 
-        return $cdt;
+        return (int) $cdt;
     }
 
     /**
@@ -657,21 +739,26 @@ class Request
             }
         }
 
-        // - If set to use 3rd party cookies for Visit ID, read the cookie
-        if (!$found) {
-            $useThirdPartyCookie = $this->shouldUseThirdPartyCookie();
-            if ($useThirdPartyCookie) {
-                $idVisitor = $this->getThirdPartyCookieVisitorId();
-                if(!empty($idVisitor)) {
-                    $found = true;
+        $privacyConfig = new \Piwik\Plugins\PrivacyManager\Config();
+
+        // Only check for cookie values if cookieless tracking is NOT forced
+        if (!$privacyConfig->forceCookielessTracking) {
+            // - If set to use 3rd party cookies for Visit ID, read the cookie
+            if (!$found) {
+                $useThirdPartyCookie = $this->shouldUseThirdPartyCookie();
+                if ($useThirdPartyCookie) {
+                    $idVisitor = $this->getThirdPartyCookieVisitorId();
+                    if (!empty($idVisitor)) {
+                        $found = true;
+                    }
                 }
             }
-        }
 
-        // If a third party cookie was not found, we default to the first party cookie
-        if (!$found) {
-            $idVisitor = Common::getRequestVar('_id', '', 'string', $this->params);
-            $found = strlen($idVisitor) >= Tracker::LENGTH_HEX_ID_STRING;
+            // If a third party cookie was not found, we default to the first party cookie
+            if (!$found) {
+                $idVisitor = Common::getRequestVar('_id', '', 'string', $this->params);
+                $found     = strlen($idVisitor) >= Tracker::LENGTH_HEX_ID_STRING;
+            }
         }
 
         if ($found) {

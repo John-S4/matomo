@@ -69,21 +69,21 @@ class RequestCommand extends ConsoleCommand
         if ($input->getOption('superuser')) {
             StaticContainer::addDefinitions(array(
                 'observers.global' => \DI\add(array(
-                    array('Environment.bootstrapped', function () {
+                    array('Environment.bootstrapped', \DI\value(function () {
                         Access::getInstance()->setSuperUserAccess(true);
-                    })
+                    }))
                 )),
             ));
         }
 
         require_once PIWIK_INCLUDE_PATH . $indexFile;
 
-        if (!empty($process)) {
-            $process->finishProcess();
-        }
-
         while (ob_get_level()) {
            echo ob_get_clean();
+        }
+        
+        if (!empty($process)) {
+            $process->finishProcess();
         }
     }
 
@@ -103,9 +103,11 @@ class RequestCommand extends ConsoleCommand
         Url::setHost($hostname);
 
         $query = $input->getArgument('url-query');
+        $_SERVER['QUERY_STRING'] = $query;
+
         $query = UrlHelper::getArrayFromQueryString($query); // NOTE: this method can create the StaticContainer now
         foreach ($query as $name => $value) {
-            $_GET[$name] = $value;
+            $_GET[$name] = urldecode($value);
         }
     }
 

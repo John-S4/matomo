@@ -43,7 +43,8 @@ abstract class GeoIp2 extends LocationProvider
             'dbip-city-lite-\d{4}-\d{2}.mmdb', 'GeoIP2-City-Africa.mmdb', 'GeoIP2-City-Asia-Pacific.mmdb', 'GeoIP2-City-Europe.mmdb',
             'GeoIP2-City-North-America.mmdb', 'GeoIP2-City-South-America.mmdb', 'GeoIP2-Enterprise.mmdb', 'GeoIP2-Country.mmdb',
             'dbip-country-lite-\d{4}-\d{2}.mmdb', 'GeoLite2-City.mmdb', 'GeoLite2-Country.mmdb', 'DBIP-Enterprise.mmdb'),
-        'isp' => array('GeoIP2-ISP.mmdb', 'GeoLite2-ASN.mmdb', 'DBIP-ISP.mmdb', 'GeoIP2-Enterprise.mmdb', 'DBIP-Enterprise.mmdb'),
+        'isp' => array('GeoIP2-ISP.mmdb', 'GeoLite2-ASN.mmdb', 'DBIP-ISP.mmdb', 'GeoIP2-Enterprise.mmdb', 'DBIP-Enterprise.mmdb',
+            'DBIP-ASN.mmdb', 'dbip-asn-lite-\d{4}-\d{2}.mmdb'),
     );
 
     public static function getDbIpLiteUrl($type = 'city')
@@ -65,7 +66,7 @@ abstract class GeoIp2 extends LocationProvider
 
             // get location using test IP and check that some information was returned
             $location = $this->getLocation(array('ip' => $testIp));
-            $location = array_filter($location);
+            $location = $location ? array_filter($location) : $location;
             $isResultCorrect = !empty($location);
 
             if (!$isResultCorrect) {

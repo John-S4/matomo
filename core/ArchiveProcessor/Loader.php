@@ -31,7 +31,7 @@ use Psr\Log\LoggerInterface;
  */
 class Loader
 {
-    const MIN_VISIT_TIME_TTL = 3600;
+    private static $archivingDepth = 0;
 
     /**
      * @var Parameters
@@ -93,7 +93,12 @@ class Loader
     public function prepareArchive($pluginName)
     {
         return Context::changeIdSite($this->params->getSite()->getId(), function () use ($pluginName) {
-            return $this->prepareArchiveImpl($pluginName);
+            try {
+                ++self::$archivingDepth;
+                return $this->prepareArchiveImpl($pluginName);
+            } finally {
+                --self::$archivingDepth;
+            }
         });
     }
 
@@ -113,6 +118,7 @@ class Loader
         list($idArchives, $visits, $visitsConverted, $isAnyArchiveExists) = $this->loadExistingArchiveIdFromDb();
         if (!empty($idArchives)
             && !$this->params->getArchiveOnlyReport()
+            && !Rules::isForceArchivingSinglePlugin()
         ) {
             // we have a usable idarchive (it's not invalidated and it's new enough), and we are not archiving
             // a single report
@@ -135,6 +141,10 @@ class Loader
             && $isAnyArchiveExists
         ) {
             $this->invalidatedReportsIfNeeded();
+        }
+
+        if (SettingsServer::isArchivePhpTriggered()) {
+            $this->logger->info("initiating archiving via core:archive for " . $this->params);
         }
 
         /** @var ArchivingStatus $archivingStatus */
@@ -409,44 +419,14 @@ class Loader
 
     private function hasSiteVisitsBetweenTimeframe($idSite, Period $period)
     {
-        $minVisitTimesPerSite = $this->getMinVisitTimesPerSite($idSite);
-        if (empty($minVisitTimesPerSite)) {
-            return false;
-        }
-
         $timezone = Site::getTimezoneFor($idSite);
         list($date1, $date2) = $period->getBoundsInTimezone($timezone);
-        if ($date2->isEarlier($minVisitTimesPerSite)) {
-            return false;
-        }
 
         return $this->rawLogDao->hasSiteVisitsBetweenTimeframe($date1->getDatetime(), $date2->getDatetime(), $idSite);
     }
 
-    private function getMinVisitTimesPerSite($idSite)
+    public static function getArchivingDepth()
     {
-        $cache = Cache::getLazyCache();
-        $cacheKey = 'Archiving.minVisitTime.' . $idSite;
-
-        $value = $cache->fetch($cacheKey);
-        if ($value === false) {
-            $value = $this->rawLogDao->getMinimumVisitTimeForSite($idSite);
-            if (!empty($value)) {
-                $cache->save($cacheKey, $value, $ttl = self::MIN_VISIT_TIME_TTL);
-            }
-        }
-
-        if (!empty($value)) {
-            $value = Date::factory($value);
-        }
-
-        return $value;
-    }
-
-    public static function invalidateMinVisitTimeCache($idSite)
-    {
-        $cache = Cache::getLazyCache();
-        $cacheKey = 'Archiving.minVisitTime.' . $idSite;
-        $cache->delete($cacheKey);
+        return self::$archivingDepth;
     }
 }

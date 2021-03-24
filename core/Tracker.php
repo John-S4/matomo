@@ -77,6 +77,9 @@ class Tracker
         if (empty($GLOBALS['PIWIK_TRACKER_DEBUG'])) {
             $GLOBALS['PIWIK_TRACKER_DEBUG'] = self::isDebugEnabled();
         }
+        if (!empty($GLOBALS['PIWIK_TRACKER_DEBUG']) && !Common::isPhpCliMode()) {
+            Common::sendHeader('Content-Type: text/plain');
+        }
         PluginManager::getInstance()->loadTrackerPlugins();
     }
 
@@ -305,11 +308,6 @@ class Tracker
             \Piwik\Tracker\Cache::deleteTrackerCache();
             Filesystem::clearPhpCaches();
         }
-
-        $pluginsDisabled = array('Provider');
-
-        // Disable provider plugin, because it is so slow to do many reverse ip lookups
-        PluginManager::getInstance()->setTrackerPluginsNotToLoad($pluginsDisabled);
     }
 
     protected function loadTrackerPlugins()

@@ -9,11 +9,14 @@
 
 namespace Piwik\Archive;
 
+use Piwik\Access;
 use Piwik\Archive\ArchiveInvalidator\InvalidationResult;
 use Piwik\ArchiveProcessor\ArchivingStatus;
 use Piwik\ArchiveProcessor\Loader;
+use Piwik\ArchiveProcessor\Rules;
 use Piwik\Config;
 use Piwik\Container\StaticContainer;
+use Piwik\CronArchive\ReArchiveList;
 use Piwik\CronArchive\SegmentArchiving;
 use Piwik\DataAccess\ArchiveTableCreator;
 use Piwik\DataAccess\Model;
@@ -31,6 +34,7 @@ use Piwik\SettingsServer;
 use Piwik\Site;
 use Piwik\Tracker\Cache;
 use Piwik\Tracker\Model as TrackerModel;
+use Psr\Log\LoggerInterface;
 
 /**
  * Service that can be used to invalidate archives or add archive references to a list so they will
@@ -79,11 +83,22 @@ class ArchiveInvalidator
      */
     private $segmentArchiving;
 
-    public function __construct(Model $model, ArchivingStatus $archivingStatus)
+    /**
+     * @var LoggerInterface
+     */
+    private $logger;
+
+    /**
+     * @var int[]
+     */
+    private $allIdSitesCache;
+
+    public function __construct(Model $model, ArchivingStatus $archivingStatus, LoggerInterface $logger)
     {
         $this->model = $model;
         $this->archivingStatus = $archivingStatus;
         $this->segmentArchiving = null;
+        $this->logger = $logger;
     }
 
     public function getAllRememberToInvalidateArchivedReportsLater()
@@ -315,11 +330,11 @@ class ArchiveInvalidator
 
         $this->markArchivesInvalidated($idSites, $allPeriodsToInvalidate, $segment, $period != 'range', $forceInvalidateNonexistantRanges, $name);
 
-        foreach ($idSites as $idSite) {
-            Loader::invalidateMinVisitTimeCache($idSite);
-        }
-
-        if ($period != 'range') {
+        $isInvalidatingDays = $period == 'day' || $cascadeDown || empty($period);
+        $isNotInvalidatingSegment = empty($segment) || empty($segment->getString());
+        if ($isInvalidatingDays
+            && $isNotInvalidatingSegment
+        ) {
             foreach ($idSites as $idSite) {
                 foreach ($dates as $date) {
                     if (is_string($date)) {
@@ -337,7 +352,7 @@ class ArchiveInvalidator
 
     private function getAllPeriodsByYearMonth($periodOrAll, $dates, $cascadeDown, &$result = [])
     {
-        $periods = $periodOrAll ? [$periodOrAll] : ['day', 'week', 'month', 'year'];
+        $periods = $periodOrAll ? [$periodOrAll] : ['day'];
         foreach ($periods as $period) {
             foreach ($dates as $date) {
                 $periodObj = $this->makePeriod($date, $period);
@@ -448,34 +463,42 @@ class ArchiveInvalidator
      * Schedule rearchiving of reports for a single plugin or single report for N months in the past. The next time
      * core:archive is run, they will be processed.
      *
-     * @param int[] $idSite
-     * @param Date $date1
-     * @param Date $date2
+     * @param int[]|string $idSites A list of idSites or 'all'
      * @param string $plugin
      * @param string|null $report
+     * @param Date|null $startDate
      * @throws \Exception
      * @api
      */
-    public function reArchiveReport(array $idSites, string $plugin, string $report = null, int $lastNMonthsToInvalidate = null)
+    public function reArchiveReport($idSites, string $plugin = null, string $report = null, Date $startDate = null, Segment $segment = null)
     {
-        $lastNMonthsToInvalidate = $lastNMonthsToInvalidate ?: Config::getInstance()->General['rearchive_reports_in_past_last_n_months'];
-        if (empty($lastNMonthsToInvalidate)) {
-            return;
-        }
-
-        $lastNMonthsToInvalidate = (int) substr($lastNMonthsToInvalidate, 4);
-        if (empty($lastNMonthsToInvalidate)) {
-            return;
-        }
-
         $date2 = Date::yesterday();
-        $date1 = $date2->subMonth($lastNMonthsToInvalidate)->setDay(1);
+
+        $earliestDateToRearchive = $this->getEarliestDateToRearchive();
+        if (empty($startDate)) {
+            if (empty($earliestDateToRearchive)) {
+                return null; // INI setting set to 0 months so no rearchiving
+            }
+
+            $startDate = $earliestDateToRearchive;
+        } else if (!empty($earliestDateToRearchive)) {
+            // don't allow archiving further back than the rearchive_reports_in_past_last_n_months date allows
+            $startDate = $startDate->isEarlier($earliestDateToRearchive) ? $earliestDateToRearchive : $startDate;
+        }
+
+        if ($idSites === 'all') {
+            $idSites = $this->getAllSitesId();
+        }
 
         $dates = [];
-        $date = $date1;
+        $date = $startDate;
         while ($date->isEarlier($date2)) {
             $dates[] = $date;
             $date = $date->addDay(1);
+        }
+
+        if (empty($dates)) {
+            return;
         }
 
         $name = $plugin;
@@ -483,26 +506,170 @@ class ArchiveInvalidator
             $name .= '.' . $report;
         }
 
-        $this->markArchivesAsInvalidated($idSites, $dates, 'day', null, $cascadeDown = false, $forceInvalidateRanges = false, $name);
-
-        foreach ($idSites as $idSite) {
-            $segmentDatesToInvalidate = $this->getSegmentArchiving()->getSegmentArchivesToInvalidate($idSite);
-            foreach ($segmentDatesToInvalidate as $info) {
-                $latestDate = Date::factory($info['date']);
-                $latestDate = $latestDate->isEarlier($date1) ? $latestDate : $date1;
-
-                $datesToInvalidateForSegment = [];
-
-                $date = $latestDate;
-                while ($date->isEarlier($date2)) {
-                    $datesToInvalidateForSegment[] = $date;
-                    $date = $date->addDay(1);
+        $this->markArchivesAsInvalidated($idSites, $dates, 'day', $segment, $cascadeDown = false, $forceInvalidateRanges = false, $name);
+        if (empty($segment)
+            && Rules::shouldProcessSegmentsWhenReArchivingReports()
+        ) {
+            foreach ($idSites as $idSite) {
+                foreach (Rules::getSegmentsToProcess([$idSite]) as $segment) {
+                    $this->markArchivesAsInvalidated($idSites, $dates, 'day', new Segment($segment, [$idSite]),
+                        $cascadeDown = false, $forceInvalidateRanges = false, $name);
                 }
-
-                $this->markArchivesAsInvalidated($idSites, $datesToInvalidateForSegment, 'day', new Segment($info['segment'], [$idSite]),
-                    $cascadeDown = false, $forceInvalidateRanges = false, $name);
             }
         }
+    }
+
+    /**
+     * Remove invalidations for a specific report or all invalidations for a specific plugin. If your plugin supports
+     * archiving data in the past, you may want to call this method to remove any pending invalidations if, for example,
+     * your plugin is deactivated or a report deleted.
+     *
+     * @param int|int[] $idSite one or more site IDs or 'all' for all site IDs
+     * @param string $string
+     * @param string|null $report
+     */
+    public function removeInvalidations($idSite, $plugin, $report = null)
+    {
+        if (empty($report)) {
+            $this->model->removeInvalidationsLike($idSite, $plugin);
+        } else {
+            $this->model->removeInvalidations($idSite, $plugin, $report);
+        }
+    }
+
+    /**
+     * Schedules a re-archiving reports without propagating exceptions. This is scheduled
+     * since adding invalidations can take a long time and delay UI response times.
+     *
+     * @param int|int[]|'all' $idSites
+     * @param string|int $pluginName
+     * @param string|null $report
+     * @param Date|null $startDate
+     */
+    public function scheduleReArchiving($idSites, string $pluginName = null, $report = null, Date $startDate = null,
+                                        Segment $segment = null)
+    {
+        if (!empty($report)) {
+            $this->removeInvalidationsSafely($idSites, $pluginName, $report);
+        }
+        try {
+            $reArchiveList = new ReArchiveList($this->logger);
+            $reArchiveList->add(json_encode([
+                'idSites' => $idSites,
+                'pluginName' => $pluginName,
+                'report' => $report,
+                'startDate' => $startDate ? $startDate->getTimestamp() : null,
+                'segment' => $segment ? $segment->getString() : null,
+            ]));
+        } catch (\Throwable $ex) {
+            $this->logger->info("Failed to schedule rearchiving of past reports for $pluginName plugin.");
+        }
+    }
+
+    /**
+     * Applies the queued archiving rearchiving entries.
+     */
+    public function applyScheduledReArchiving()
+    {
+        $reArchiveList = new ReArchiveList($this->logger);
+        $items = $reArchiveList->getAll();
+
+        foreach ($items as $item) {
+            try {
+                $entry = @json_decode($item, true);
+                if (empty($entry)) {
+                    continue;
+                }
+
+                $idSites = Site::getIdSitesFromIdSitesString($entry['idSites']);
+
+                $this->reArchiveReport(
+                    $idSites,
+                    $entry['pluginName'],
+                    $entry['report'],
+                    !empty($entry['startDate']) ? Date::factory((int) $entry['startDate']) : null,
+                    !empty($entry['segment']) ? new Segment($entry['segment'], $idSites) : null
+                );
+            } catch (\Throwable $ex) {
+                $this->logger->info("Failed to create invalidations for report re-archiving (idSites = {idSites}, pluginName = {pluginName}, report = {report}, startDate = {startDateTs}): {ex}", [
+                    'idSites' => json_encode($entry['idSites']),
+                    'pluginName' => $entry['pluginName'],
+                    'report' => $entry['report'],
+                    'startDateTs' => $entry['startDate'],
+                    'ex' => $ex,
+                ]);
+            } finally {
+                $reArchiveList->remove([$item]);
+            }
+        }
+    }
+
+    /**
+     * Calls removeInvalidations() without propagating exceptions.
+     *
+     * @param int|int[]|'all' $idSites
+     * @param string $pluginName
+     * @param string|null $report
+     */
+    public function removeInvalidationsSafely($idSites, $pluginName, $report = null)
+    {
+        try {
+            $this->removeInvalidations($idSites, $pluginName, $report);
+            $this->removeInvalidationsFromDistributedList($idSites, $pluginName, $report);
+        } catch (\Throwable $ex) {
+            $logger = StaticContainer::get(LoggerInterface::class);
+            $logger->debug("Failed to remove invalidations the for $pluginName plugin.");
+        }
+    }
+
+    public function removeInvalidationsFromDistributedList($idSites, $pluginName = null, $report = null)
+    {
+        $list = new ReArchiveList();
+        $entries = $list->getAll();
+
+        if ($idSites === 'all') {
+            $idSites = $this->getAllSitesId();
+        }
+
+        foreach ($entries as $index => $entry) {
+            $entry = @json_decode($entry, true);
+            if (empty($entry)) {
+                unset($entries[$index]);
+                continue;
+            }
+
+            $entryPluginName = $entry['pluginName'];
+            if (!empty($pluginName)
+                && $pluginName != $entryPluginName
+            ) {
+                continue;
+            }
+
+            $entryReport = $entry['report'];
+            if (!empty($pluginName)
+                && !empty($report)
+                && $report != $entryReport
+            ) {
+                continue;
+            }
+
+            $sitesInEntry = $entry['idSites'];
+            if ($sitesInEntry === 'all') {
+                $sitesInEntry = $this->getAllSitesId();
+            }
+
+            $diffSites = array_diff($sitesInEntry, $idSites);
+            if (empty($diffSites)) {
+                unset($entries[$index]);
+                continue;
+            }
+
+            $entry['idSites'] = $diffSites;
+
+            $entries[$index] = json_encode($entry);
+        }
+
+        $list->setAll(array_values($entries));
     }
 
     /**
@@ -613,5 +780,37 @@ class ArchiveInvalidator
             $this->segmentArchiving = new SegmentArchiving(StaticContainer::get('ini.General.process_new_segments_from'));
         }
         return $this->segmentArchiving;
+    }
+
+    private function getAllSitesId()
+    {
+        if (isset($this->allIdSitesCache)) {
+            return $this->allIdSitesCache;
+        }
+
+        $model = new \Piwik\Plugins\SitesManager\Model();
+        $this->allIdSitesCache = $model->getSitesId();
+        return $this->allIdSitesCache;
+    }
+
+    private function getEarliestDateToRearchive()
+    {
+        $lastNMonthsToInvalidate = Config::getInstance()->General['rearchive_reports_in_past_last_n_months'];
+        if (empty($lastNMonthsToInvalidate)) {
+            return null;
+        }
+
+        if (!is_numeric($lastNMonthsToInvalidate)) {
+            $lastNMonthsToInvalidate = (int)str_replace('last', '', $lastNMonthsToInvalidate);
+            if (empty($lastNMonthsToInvalidate)) {
+                return null;
+            }
+        }
+
+        if ($lastNMonthsToInvalidate <= 0) {
+            return null;
+        }
+
+        return Date::yesterday()->subMonth($lastNMonthsToInvalidate)->setDay(1);
     }
 }

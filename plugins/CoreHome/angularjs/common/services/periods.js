@@ -126,6 +126,7 @@
             startMonth.setDate(1);
 
             var endMonth = new Date(this.dateInPeriod.getTime());
+            endMonth.setDate(1);
             endMonth.setMonth(endMonth.getMonth() + 1);
             endMonth.setDate(0);
 
@@ -209,6 +210,7 @@
         } else if (childPeriodType === 'week') {
             startDate.setDate(startDate.getDate() - (nAmount * 7));
         } else if (childPeriodType === 'month') {
+            startDate.setDate(1);
             startDate.setMonth(startDate.getMonth() - nAmount);
         } else if (childPeriodType === 'year') {
             startDate.setFullYear(startDate.getFullYear() - nAmount);
@@ -321,6 +323,8 @@
             return strDate;
         }
 
+        strDate = decodeURIComponent(strDate);
+
         if (strDate === 'today'
             || strDate === 'now'
         ) {
@@ -334,6 +338,25 @@
             var yesterday = getToday();
             yesterday.setDate(yesterday.getDate() - 1);
             return yesterday;
+        }
+
+        if (strDate.match(/last[ -]?week/i)) {
+            var lastWeek = getToday();
+            lastWeek.setDate(lastWeek.getDate() - 7);
+            return lastWeek;
+        }
+
+        if (strDate.match(/last[ -]?month/i)) {
+            var lastMonth = getToday();
+            lastMonth.setDate(1);
+            lastMonth.setMonth(lastMonth.getMonth() - 1);
+            return lastMonth;
+        }
+
+        if (strDate.match(/last[ -]?year/i)) {
+            var lastYear = getToday();
+            lastYear.setFullYear(lastYear.getFullYear() - 1);
+            return lastYear;
         }
 
         try {

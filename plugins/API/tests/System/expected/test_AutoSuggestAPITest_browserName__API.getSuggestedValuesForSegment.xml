@@ -23,6 +23,8 @@
 	<row>Atomic Web Browser</row>
 	<row>Avast Secure Browser</row>
 	<row>AVG Secure Browser</row>
+	<row>Avira Scout</row>
+	<row>AwoX</row>
 	<row>Beaker Browser</row>
 	<row>Beamrise</row>
 	<row>BlackBerry Browser</row>
@@ -33,13 +35,21 @@
 	<row>BlackHawk</row>
 	<row>Bunjalloo</row>
 	<row>B-Line</row>
+	<row>Blue Browser</row>
+	<row>Borealis Navigator</row>
 	<row>Brave</row>
 	<row>BriskBard</row>
 	<row>BrowseX</row>
+	<row>Browzar</row>
+	<row>Biyubi</row>
+	<row>Byffox</row>
 	<row>Camino</row>
 	<row>CCleaner</row>
+	<row>Chedot</row>
 	<row>Centaury</row>
 	<row>Coc Coc</row>
+	<row>CoolBrowser</row>
+	<row>Colibri</row>
 	<row>Comodo Dragon</row>
 	<row>Coast</row>
 	<row>Charon</row>
@@ -53,18 +63,27 @@
 	<row>CoolNovo</row>
 	<row>CometBird</row>
 	<row>COS Browser</row>
+	<row>Cornowser</row>
+	<row>Chim Lac</row>
 	<row>ChromePlus</row>
 	<row>Chromium</row>
+	<row>Chromium GOST</row>
 	<row>Cyberfox</row>
 	<row>Cheshire</row>
 	<row>Crusta</row>
+	<row>Craving Explorer</row>
+	<row>Crazy Browser</row>
 	<row>Cunaguaro</row>
 	<row>Chrome Webview</row>
 	<row>dbrowser</row>
 	<row>Deepnet Explorer</row>
+	<row>deg-degan</row>
+	<row>Deledao</row>
 	<row>Delta Browser</row>
+	<row>DeskBrowse</row>
 	<row>Dolphin</row>
 	<row>Dorado</row>
+	<row>Dot Browser</row>
 	<row>Dooble</row>
 	<row>Dillo</row>
 	<row>DuckDuckGo Privacy Browser</row>
@@ -88,12 +107,19 @@
 	<row>Firefox Reality</row>
 	<row>Firefox Rocket</row>
 	<row>Flock</row>
+	<row>Flow</row>
 	<row>Firefox Mobile</row>
 	<row>Fireweb</row>
 	<row>Fireweb Navigator</row>
+	<row>Flast</row>
 	<row>FreeU</row>
 	<row>Galeon</row>
+	<row>Ghostery Privacy Browser</row>
+	<row>GinxDroid Browser</row>
+	<row>Glass Browser</row>
 	<row>Google Earth</row>
+	<row>GOG Galaxy</row>
+	<row>HasBrowser</row>
 	<row>Hawk Turbo Browser</row>
 	<row>hola! Browser</row>
 	<row>HotJava</row>
@@ -110,8 +136,11 @@
 	<row>Internet Explorer</row>
 	<row>IE Mobile</row>
 	<row>Iron</row>
+	<row>Japan Browser</row>
 	<row>Jasmine</row>
+	<row>JavaFX</row>
 	<row>Jig Browser</row>
+	<row>Jig Browser Plus</row>
 	<row>Jio Browser</row>
 	<row>K.Browser</row>
 	<row>Kindle Browser</row>
@@ -120,6 +149,7 @@
 	<row>Kapiko</row>
 	<row>Kinza</row>
 	<row>Kiwi</row>
+	<row>Kode Browser</row>
 	<row>Kylo</row>
 	<row>Kazehakase</row>
 	<row>Cheetah Browser</row>
@@ -127,9 +157,12 @@
 	<row>LG Browser</row>
 	<row>Light</row>
 	<row>Links</row>
+	<row>Lolifox</row>
 	<row>Lovense Browser</row>
 	<row>LuaKit</row>
+	<row>Lulumi</row>
 	<row>Lunascape</row>
+	<row>Lunascape Lite</row>
 	<row>Lynx</row>
 	<row>mCent</row>
 	<row>MicroB</row>
@@ -144,7 +177,12 @@
 	<row>Minimo</row>
 	<row>Mint Browser</row>
 	<row>Maxthon</row>
+	<row>MxNitro</row>
 	<row>Mypal</row>
+	<row>Monument Browser</row>
+	<row>MAUI WAP Browser</row>
+	<row>Navigateur Web</row>
+	<row>NFS Browser</row>
 	<row>Nokia Browser</row>
 	<row>Nokia OSS Browser</row>
 	<row>Nokia Ovi Browser</row>
@@ -158,8 +196,10 @@
 	<row>Oculus Browser</row>
 	<row>Opera Mini iOS</row>
 	<row>Obigo</row>
+	<row>Odin</row>
 	<row>Odyssey Web Browser</row>
 	<row>Off By One</row>
+	<row>OhHai Browser</row>
 	<row>ONE Browser</row>
 	<row>Opera GX</row>
 	<row>Opera Neon</row>
@@ -169,6 +209,7 @@
 	<row>Opera</row>
 	<row>Opera Next</row>
 	<row>Opera Touch</row>
+	<row>Orca</row>
 	<row>Ordissimo</row>
 	<row>Oregano</row>
 	<row>Origin In-Game Overlay</row>
@@ -178,18 +219,27 @@
 	<row>Otter Browser</row>
 	<row>Palm Blazer</row>
 	<row>Pale Moon</row>
+	<row>Polypane</row>
 	<row>Oppo Browser</row>
 	<row>Palm Pre</row>
 	<row>Puffin</row>
 	<row>Palm WebPro</row>
 	<row>Palmscape</row>
+	<row>Perfect Browser</row>
+	<row>Phantom Browser</row>
 	<row>Phoenix</row>
+	<row>Phoenix Browser</row>
+	<row>PlayFree Browser</row>
 	<row>Polaris</row>
 	<row>Polarity</row>
+	<row>PolyBrowser</row>
+	<row>PrivacyWall</row>
 	<row>Microsoft Edge</row>
+	<row>QQ Browser Lite</row>
 	<row>QQ Browser Mini</row>
 	<row>QQ Browser</row>
 	<row>Qutebrowser</row>
+	<row>Quark</row>
 	<row>QupZilla</row>
 	<row>Qwant Mobile</row>
 	<row>QtWebEngine</row>
@@ -198,15 +248,24 @@
 	<row>RockMelt</row>
 	<row>Samsung Browser</row>
 	<row>Sailfish Browser</row>
+	<row>Seewo Browser</row>
 	<row>SEMC-Browser</row>
 	<row>Sogou Explorer</row>
 	<row>Safari</row>
+	<row>Safe Exam Browser</row>
 	<row>SalamWeb</row>
+	<row>SFive</row>
 	<row>Shiira</row>
 	<row>SimpleBrowser</row>
+	<row>Sizzy</row>
 	<row>Skyfire</row>
 	<row>Seraphic Sraf</row>
 	<row>Sleipnir</row>
+	<row>Slimjet</row>
+	<row>SP Browser</row>
+	<row>7Star</row>
+	<row>Smart Lenovo Browser</row>
+	<row>Smooz</row>
 	<row>Snowshoe</row>
 	<row>Sogou Mobile Browser</row>
 	<row>Splash</row>
@@ -215,23 +274,30 @@
 	<row>SuperBird</row>
 	<row>Super Fast Browser</row>
 	<row>surf</row>
+	<row>Stargon</row>
 	<row>START Internet Browser</row>
 	<row>Steam In-Game Overlay</row>
 	<row>Streamy</row>
 	<row>Swiftfox</row>
 	<row>Seznam Browser</row>
+	<row>T-Browser</row>
 	<row>t-online.de Browser</row>
 	<row>Tao Browser</row>
 	<row>TenFourFox</row>
 	<row>Tenta Browser</row>
 	<row>Tizen Browser</row>
+	<row>Tungsten</row>
+	<row>ToGate</row>
 	<row>TweakStyle</row>
 	<row>TV Bro</row>
 	<row>UBrowser</row>
 	<row>UC Browser</row>
+	<row>UC Browser HD</row>
 	<row>UC Browser Mini</row>
 	<row>UC Browser Turbo</row>
+	<row>UR Browser</row>
 	<row>Uzbl</row>
+	<row>Venus Browser</row>
 	<row>Vivaldi</row>
 	<row>vivo Browser</row>
 	<row>Vision Mobile Browser</row>
@@ -243,8 +309,15 @@
 	<row>Whale Browser</row>
 	<row>wOSBrowser</row>
 	<row>WeTab Browser</row>
+	<row>Yahoo! Japan Browser</row>
 	<row>Yandex Browser</row>
 	<row>Yandex Browser Lite</row>
+	<row>Yaani Browser</row>
+	<row>Yolo Browser</row>
+	<row>xStand</row>
 	<row>Xiino</row>
+	<row>Xvast</row>
+	<row>Zetakey</row>
+	<row>Zvu</row>
 	<row>Unknown</row>
 </result>

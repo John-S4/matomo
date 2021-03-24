@@ -10,6 +10,7 @@ namespace Piwik\Tests\Fixtures;
 use Exception;
 use Piwik\API\Proxy;
 use Piwik\API\Request;
+use Piwik\ArchiveProcessor\Rules;
 use Piwik\Columns\Dimension;
 use Piwik\Common;
 use Piwik\DataTable;
@@ -127,6 +128,19 @@ class UITestFixture extends SqlDump
         );
 
         $this->addDangerousLinks();
+
+        $model = new \Piwik\Plugins\UsersManager\Model();
+        $user  = $model->getUser(self::VIEW_USER_LOGIN);
+
+        if (empty($user)) {
+            $model->addUser(self::VIEW_USER_LOGIN, self::VIEW_USER_PASSWORD, 'hello2@example.org', Date::now()->getDatetime());
+            $model->addUserAccess(self::VIEW_USER_LOGIN, 'view', array(1, 3));
+        } else {
+            $model->updateUser(self::VIEW_USER_LOGIN, self::VIEW_USER_PASSWORD, 'hello2@example.org');
+        }
+        if (!$model->getUserByTokenAuth(self::VIEW_USER_TOKEN)) {
+            $model->addTokenAuth(self::VIEW_USER_LOGIN,self::VIEW_USER_TOKEN, 'View user token', Date::now()->getDatetime());
+        }
     }
 
     public function performSetUp($setupEnvironmentOnly = false)
@@ -431,6 +445,7 @@ class UITestFixture extends SqlDump
 
     public function createSegments()
     {
+        Rules::setBrowserTriggerArchiving(false);
         Db::exec("TRUNCATE TABLE " . Common::prefixTable('segment'));
 
         $segmentName = $this->xssTesting->forTwig('segment');
@@ -444,6 +459,7 @@ class UITestFixture extends SqlDump
             'From Europe ' . $segmentName, "continentCode==eur", $idSite = 1, $autoArchive = false, $enabledAllUsers = true);
         APISegmentEditor::getInstance()->add(
             "Multiple actions", "actions>=2", $idSite = 1, $autoArchive = false, $enabledAllUsers = true);
+        Rules::setBrowserTriggerArchiving(true);
     }
 
     public function provideContainerConfig()
@@ -454,7 +470,7 @@ class UITestFixture extends SqlDump
         return [
             'Tests.now' => \DI\decorate(function(){ return Option::get("Tests.forcedNowTimestamp"); }),
             'observers.global' => \DI\add([
-                ['Report.addReports', function (&$reports) {
+                ['Report.addReports', \DI\value(function (&$reports) {
                     $report = new XssReport();
                     $report->initForXss('forTwig');
                     $reports[] = $report;
@@ -462,11 +478,11 @@ class UITestFixture extends SqlDump
                     $report = new XssReport();
                     $report->initForXss('forAngular');
                     $reports[] = $report;
-                }],
-                ['Dimension.addDimensions', function (&$instances) {
+                })],
+                ['Dimension.addDimensions', \DI\value(function (&$instances) {
                     $instances[] = new XssDimension();
-                }],
-                ['API.Request.intercept', function (&$result, $finalParameters, $pluginName, $methodName) {
+                })],
+                ['API.Request.intercept', \DI\value(function (&$result, $finalParameters, $pluginName, $methodName) {
                     if ($pluginName != 'ExampleAPI' && $methodName != 'xssReportforTwig' && $methodName != 'xssReportforAngular') {
                         return;
                     }
@@ -485,7 +501,7 @@ class UITestFixture extends SqlDump
                         'nb_visits' => 15,
                     ]);
                     $result = $dataTable;
-                }],
+                })],
             ]),
             Proxy::class => \DI\get(CustomApiProxy::class),
             'log.handlers' => \DI\decorate(function ($previous, ContainerInterface $c) {

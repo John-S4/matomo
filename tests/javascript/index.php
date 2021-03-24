@@ -8,11 +8,18 @@
 
 $cacheBuster = md5(uniqid(mt_rand(), true));
 
+
 // Note: when you want to debug the piwik.js during the tests, you need to set a cache buster that is always the same
 // between requests so the browser knows it is the same file and know where to breakpoint.
 //$cacheBuster= 'nocb'; // uncomment to debug
 
 $root = dirname(__FILE__) . '/../..';
+$testPluginPath = '*';
+if (!empty($_GET['plugin'])
+    && ctype_alnum($_GET['plugin'])
+    && is_dir($root . '/plugins/' . $_GET['plugin'])) {
+    $testPluginPath = $_GET['plugin'];
+}
 
 try {
     $mysql = include_once $root . "/tests/PHPUnit/bootstrap.php";
@@ -92,9 +99,16 @@ testTrackPageViewAsync();
 
     <?php
     include_once $root . '/core/Filesystem.php';
-    $files = \Piwik\Filesystem::globr($root . '/plugins/*/tests/javascript', 'head.php');
+    $files = \Piwik\Filesystem::globr($root . '/plugins/'.$testPluginPath.'/tests/javascript', 'head.php');
     foreach ($files as $file) {
         include_once $file;
+    }
+    if ($testPluginPath !== '*') {
+        // Travis would always include tag manager
+        $files = \Piwik\Filesystem::globr($root . '/plugins/TagManager/tests/javascript', 'head.php');
+        foreach ($files as $file) {
+            include_once $file;
+        }
     }
     ?>
 <style>
@@ -1297,11 +1311,15 @@ function PiwikTest() {
         }
 
         function assertImpressionRequestParams(name, piece, target, expected, message) {
-            strictEqual(content.buildImpressionRequestParams(name, piece, target), expected, message);
+            strictEqual(content.buildImpressionRequestParams(name, piece, target), expected + '&ca=1', message);
         }
 
         function assertInteractionRequestParams(interaction, name, piece, target, expected, message) {
-            strictEqual(content.buildInteractionRequestParams(interaction, name, piece, target), expected, message);
+            var actual = content.buildInteractionRequestParams(interaction, name, piece, target);
+            if (actual) {
+                expected = expected + '&ca=1';
+            }
+            strictEqual(actual, expected, message);
         }
 
         function assertShouldIgnoreInteraction(id, message) {
@@ -1808,7 +1826,7 @@ function PiwikTest() {
 
             strictEqual(actual.indexOf(expectedStartsWith), 0, message + " " +  actual + ' should start with ' + expectedStartsWith);
 
-            var expectedString = '&idsite=1&rec=1';
+            var expectedString = '&ca=1&idsite=1&rec=1';
             strictEqual(actual.indexOf(expectedString), expectedStartsWith.length, 'did not find ' + expectedString + ' in ' + actual);
             // make sure it contains all those other tracking stuff directly afterwards so we can assume it did append
             // the other request stuff and we also make sure to compare the whole custom string as we check from
@@ -1891,25 +1909,25 @@ function PiwikTest() {
         strictEqual(actual, undefined, 'appendContentInteractionToRequestIfPossible, the content block node was clicked but it is not the target');
 
         actual = tracker.appendContentInteractionToRequestIfPossible(_s('#ex104'));
-        strictEqual(actual, 'c_n=' + toEncodedAbsolutePath('img.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img.jpg'), 'appendContentInteractionToRequestIfPossible, the actual target node was clicked');
+        strictEqual(actual, 'c_n=' + toEncodedAbsolutePath('img.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img.jpg') + '&ca=1', 'appendContentInteractionToRequestIfPossible, the actual target node was clicked');
 
         actual = tracker.appendContentInteractionToRequestIfPossible(_s('#ex104'), 'clicki');
-        strictEqual(actual, 'c_i=clicki&c_n=' + toEncodedAbsolutePath('img.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img.jpg'), 'appendContentInteractionToRequestIfPossible, with interaction');
+        strictEqual(actual, 'c_i=clicki&c_n=' + toEncodedAbsolutePath('img.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img.jpg') + '&ca=1', 'appendContentInteractionToRequestIfPossible, with interaction');
 
         actual = tracker.appendContentInteractionToRequestIfPossible(_s('#ex104_inner'));
-        strictEqual(actual, 'c_n=' + toEncodedAbsolutePath('img.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img.jpg'), 'appendContentInteractionToRequestIfPossible, block node is target node and any node within it was clicked which is good, we build a request');
+        strictEqual(actual, 'c_n=' + toEncodedAbsolutePath('img.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img.jpg') + '&ca=1', 'appendContentInteractionToRequestIfPossible, block node is target node and any node within it was clicked which is good, we build a request');
 
         actual = tracker.appendContentInteractionToRequestIfPossible(_s('#ex104_inner'));
-        strictEqual(actual, 'c_n=' + toEncodedAbsolutePath('img.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img.jpg'), 'appendContentInteractionToRequestIfPossible, a node within a target node was clicked which is googd');
+        strictEqual(actual, 'c_n=' + toEncodedAbsolutePath('img.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img.jpg') + '&ca=1', 'appendContentInteractionToRequestIfPossible, a node within a target node was clicked which is googd');
 
         actual = tracker.appendContentInteractionToRequestIfPossible(_s('#ex105_target'));
-        strictEqual(actual, 'c_n=' + toEncodedAbsolutePath('img.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img.jpg') + '&c_t=http%3A%2F%2Fwww.example.com', 'appendContentInteractionToRequestIfPossible, target node was clicked which is good');
+        strictEqual(actual, 'c_n=' + toEncodedAbsolutePath('img.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img.jpg') + '&c_t=http%3A%2F%2Fwww.example.com&ca=1', 'appendContentInteractionToRequestIfPossible, target node was clicked which is good');
 
         actual = tracker.appendContentInteractionToRequestIfPossible(_s('#ex105_withinTarget'));
-        strictEqual(actual, 'c_n=' + toEncodedAbsolutePath('img.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img.jpg') + '&c_t=http%3A%2F%2Fwww.example.com', 'appendContentInteractionToRequestIfPossible, a node within target node was clicked which is googd');
+        strictEqual(actual, 'c_n=' + toEncodedAbsolutePath('img.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img.jpg') + '&c_t=http%3A%2F%2Fwww.example.com&ca=1', 'appendContentInteractionToRequestIfPossible, a node within target node was clicked which is googd');
 
         actual = tracker.appendContentInteractionToRequestIfPossible(_s('#ex104_inner'), 'click', 'fallbacktarget');
-        strictEqual(actual, 'c_i=click&c_n=' + toEncodedAbsolutePath('img.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img.jpg') + '&c_t=fallbacktarget', 'appendContentInteractionToRequestIfPossible, if no target found we can specify a default target');
+        strictEqual(actual, 'c_i=click&c_n=' + toEncodedAbsolutePath('img.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img.jpg') + '&c_t=fallbacktarget&ca=1', 'appendContentInteractionToRequestIfPossible, if no target found we can specify a default target');
 
 
 
@@ -2075,7 +2093,7 @@ function PiwikTest() {
     });
 
     test("API methods", function() {
-        expect(118);
+        expect(120);
 
         equal( typeof Piwik.addPlugin, 'function', 'addPlugin' );
         equal( typeof Piwik.addPlugin, 'function', 'addTracker' );
@@ -2133,12 +2151,14 @@ function PiwikTest() {
         equal( typeof tracker.setIgnoreClasses, 'function', 'setIgnoreClasses' );
         equal( typeof tracker.setRequestMethod, 'function', 'setRequestMethod' );
         equal( typeof tracker.setRequestContentType, 'function', 'setRequestContentType' );
+        equal( typeof tracker.setGenerationTimeMs, 'function', 'setGenerationTimeMs' );
         equal( typeof tracker.setReferrerUrl, 'function', 'setReferrerUrl' );
         equal( typeof tracker.setCustomUrl, 'function', 'setCustomUrl' );
         equal( typeof tracker.setDocumentTitle, 'function', 'setDocumentTitle' );
         equal( typeof tracker.setDownloadClasses, 'function', 'setDownloadClasses' );
         equal( typeof tracker.setLinkClasses, 'function', 'setLinkClasses' );
         equal( typeof tracker.setCampaignNameKey, 'function', 'setCampaignNameKey' );
+        equal( typeof tracker.disablePerformanceTracking, 'function', 'disablePerformanceTracking' );
         equal( typeof tracker.setCampaignKeywordKey, 'function', 'setCampaignKeywordKey' );
         equal( typeof tracker.discardHashTag, 'function', 'discardHashTag' );
         equal( typeof tracker.setCookieNamePrefix, 'function', 'setCookieNamePrefix' );
@@ -2146,6 +2166,7 @@ function PiwikTest() {
         equal( typeof tracker.setCookiePath, 'function', 'setCookiePath' );
         equal( typeof tracker.setSessionCookie, 'function', 'setSessionCookie' );
         equal( typeof tracker.setSecureCookie, 'function', 'setSecureCookie' );
+        equal( typeof tracker.setCookieSameSite, 'function', 'setCookieSameSite' );
         equal( typeof tracker.getCookie, 'function', 'getCookie' );
         equal( typeof tracker.hasCookies, 'function', 'hasCookies' );
         equal( typeof tracker.getCookiePath, 'function', 'getCookiePath' );
@@ -2156,7 +2177,6 @@ function PiwikTest() {
         equal( typeof tracker.setConversionAttributionFirstReferrer, 'function', 'setConversionAttributionFirstReferrer' );
         equal( typeof tracker.addListener, 'function', 'addListener' );
         equal( typeof tracker.enableLinkTracking, 'function', 'enableLinkTracking' );
-        equal( typeof tracker.setVisitStandardLength, 'function', 'setVisitStandardLength' );
         equal( typeof tracker.enableHeartBeatTimer, 'function', 'enableHeartBeatTimer' );
         equal( typeof tracker.disableHeartBeatTimer, 'function', 'disableHeartBeatTimer' );
         equal( typeof tracker.killFrame, 'function', 'killFrame' );
@@ -2269,6 +2289,7 @@ function PiwikTest() {
         equal(Piwik.getAsyncTracker().getTrackerUrl(), asyncTracker.getTrackerUrl(), 'async same getTrackerUrl()');
 
         wait(2000);
+
         var delayedTracker = Piwik.getTracker();
         var delayedVisitorId = delayedTracker.getVisitorId();
         equal(Piwik.getAsyncTracker().getVisitorId(), delayedVisitorId, 'delayedVisitorId ' + delayedVisitorId + ' should be the same as ' + Piwik.getAsyncTracker().getVisitorId());
@@ -2368,7 +2389,7 @@ function PiwikTest() {
     });
     
     test("Tracker getHostName(), *UrlParameter(), urlFixup(), domainFixup(), titleFixup() and purify()", function() {
-        expect(80);
+        expect(81);
 
         var tracker = Piwik.getTracker();
 
@@ -2395,6 +2416,7 @@ function PiwikTest() {
         equal( tracker.hook.test._getUrlParameter('http://piwik.org/?q=test', 'q'), 'test', '?q');
         equal( tracker.hook.test._getUrlParameter('http://piwik.org/?q=test#aq=not', 'q'), 'test', '?q');
         equal( tracker.hook.test._getUrlParameter('http://piwik.org/?p=test1&q=test2', 'q'), 'test2', '&q');
+        equal( tracker.hook.test._getUrlParameter('https://piwik.org/?pk_campaign=qwerty2%25-', 'pk_campaign'), 'qwerty2%-', '&pk_campaign');
 
         // _getUrlParameter in hash tag
         equal( tracker.hook.test._getUrlParameter('http://piwik.org/?p=test1&q=test2#aq=not', 'q'), 'test2', '&q');
@@ -2541,7 +2563,7 @@ function PiwikTest() {
     });
 
     test("Tracker setDomains(), isSiteHostName(), isSiteHostPath(), and getLinkIfShouldBeProcessed()", function() {
-        expect(168);
+        expect(173);
 
         var tracker = Piwik.getTracker();
         var initialDomains = tracker.getDomains();
@@ -2797,6 +2819,16 @@ function PiwikTest() {
         tracker.setSessionCookie('mytest', 'myvalue');
         equal('myvalue', tracker.getCookie('mytest'));
         strictEqual(null, tracker.getCookie('34343434343'), 'not existing cookie returns null');
+
+        equal('Lax', tracker.getConfigCookieSameSite(), 'same site cookie value is Lax by default');
+        tracker.setCookieSameSite(null);
+        equal('Lax', tracker.getConfigCookieSameSite(), 'setCookieSameSite, wont unset the value when empty');
+        tracker.setCookieSameSite('invalid');
+        equal('Lax', tracker.getConfigCookieSameSite(), 'setCookieSameSite, wont unset the value when invlaid');
+        tracker.setCookieSameSite('strict');
+        equal('Strict', tracker.getConfigCookieSameSite(), 'setCookieSameSite can be used lower case');
+        tracker.setCookieSameSite('LaX');
+        equal('Lax', tracker.getConfigCookieSameSite(), 'setCookieSameSite can be used upper case');
     });
 
     test("Tracker CrossDomainLinking()", function() {
@@ -3237,7 +3269,7 @@ function PiwikTest() {
     });
 
     test("POST requests are sent with cookies", function() {
-        expect(3);
+        expect(5);
 
         var tracker = Piwik.getTracker();
         tracker.setTrackerUrl("matomo.php");
@@ -3251,6 +3283,9 @@ function PiwikTest() {
             ok(event.success, 'succeeded');
             ok(event.xhr && event.xhr.withCredentials, 'withCredentials is true');
         });
+        ok(tracker.isUsingAlwaysUseSendBeacon());
+        tracker.setRequestMethod('GeT');
+        ok(!tracker.isUsingAlwaysUseSendBeacon());
 
         stop();
         setTimeout(function() {
@@ -4011,6 +4046,10 @@ if ($mysql) {
         // Track pageview
         tracker3.trackPageView("DoTrack");
 
+        var userIdNum = 12345;
+        tracker3.setUserId(userIdNum);
+        tracker3.trackPageView('AnotherTrack');
+
         // Firefox 9: navigator.doNotTrack is read-only
         navigator.doNotTrack = "yes";
         if (navigator.doNotTrack === "yes")
@@ -4064,7 +4103,7 @@ if ($mysql) {
             var countTrackingEvents = /<span\>([0-9]+)\<\/span\>/.exec(results);
             ok (countTrackingEvents, "countTrackingEvents is set");
             if(countTrackingEvents) {
-                equal( countTrackingEvents[1], "41", "count tracking events" );
+                equal( countTrackingEvents[1], "42", "count tracking events" );
             }
 
             // firing callback
@@ -4127,9 +4166,9 @@ if ($mysql) {
             ok( /search=search%20Keyword&idsite=1/.test(results), "site search, no cat, no results count ");
 
             // Test events
-            ok( /(e_c=Event%20Category&e_a=Event%20Action&idsite=1).*(&e_cvar=%7B%221%22%3A%5B%22cvarEventName%22%2C%22cvarEventValue%22%5D%2C%222%22%3A%5B%22cookiename2EVENT%22%2C%22cookievalue2EVENT%22%5D%7D)/.test(results), "event Category + Action + Custom Variable");
-            ok( /e_c=Event%20Category2&e_a=Event%20Action2&e_n=Event%20Name2&idsite=1/.test(results), "event Category + Action + Name");
-            ok( /e_c=Event%20Category3&e_a=Event%20Action3&e_n=Event%20Name3&e_v=3.333&idsite=1/.test(results), "event Category + Action + Name + Value");
+            ok( /(e_c=Event%20Category&e_a=Event%20Action&ca=1&idsite=1).*(&e_cvar=%7B%221%22%3A%5B%22cvarEventName%22%2C%22cvarEventValue%22%5D%2C%222%22%3A%5B%22cookiename2EVENT%22%2C%22cookievalue2EVENT%22%5D%7D)/.test(results), "event Category + Action + Custom Variable");
+            ok( /e_c=Event%20Category2&e_a=Event%20Action2&e_n=Event%20Name2&ca=1&idsite=1/.test(results), "event Category + Action + Name");
+            ok( /e_c=Event%20Category3&e_a=Event%20Action3&e_n=Event%20Name3&e_v=3.333&ca=1&idsite=1/.test(results), "event Category + Action + Name + Value");
 
             // ecommerce view
             ok( /(EcommerceView).*(&_pkc=CATEGORY%20HERE&_pks=SKU&_pkn=NAME)/.test(results), "ecommerce view");
@@ -4158,8 +4197,8 @@ if ($mysql) {
             ok( /&uid=userid%40mydomain.org/.test( results ), "setUserId(userId) function");
 
             // Testing the JavaScript Error Tracking
-            ok( /e_c=JavaScript%20Errors&e_a=http%3A%2F%2Fpiwik.org%2Fpath%2Fto%2Ffile.js%3Fcb%3D34343%3A44%3A12&e_n=Uncaught%20Error%3A%20The%20message&idsite=1/.test( results ), "enableJSErrorTracking() function with predefined onerror event");
-            ok( /e_c=JavaScript%20Errors&e_a=http%3A%2F%2Fpiwik.org%2Fpath%2Fto%2Ffile.js%3Fcb%3D3kfkf%3A45&e_n=Second%20Error%3A%20With%20less%20data&idsite=1/.test( results ), "enableJSErrorTracking() function without predefined onerror event and less parameters");
+            ok( /e_c=JavaScript%20Errors&e_a=http%3A%2F%2Fpiwik.org%2Fpath%2Fto%2Ffile.js%3Fcb%3D34343%3A44%3A12&e_n=Uncaught%20Error%3A%20The%20message&ca=1&idsite=1/.test( results ), "enableJSErrorTracking() function with predefined onerror event");
+            ok( /e_c=JavaScript%20Errors&e_a=http%3A%2F%2Fpiwik.org%2Fpath%2Fto%2Ffile.js%3Fcb%3D3kfkf%3A45&e_n=Second%20Error%3A%20With%20less%20data&ca=1&idsite=1/.test( results ), "enableJSErrorTracking() function without predefined onerror event and less parameters");
 
             ok( /matomo.php\?action_name=twoTrackers&idsite=1&/.test( results ), "addTracker() trackPageView() sends request to both Piwik instances");
             ok( /matomo.php\?action_name=twoTrackers&idsite=13&/.test( results ), "addTracker() trackPageView() sends request to both Piwik instances");
@@ -4227,7 +4266,6 @@ if ($mysql) {
             // test ping not sent on focus
             tracker.enableHeartBeatTimer();
             tracker.setCustomData('token', 7 + tokenBase);
-            tracker.setVisitStandardLength(5);
 
             return Q.delay(6000); // should not send a tracking request because of visit standard length reached
         }).then(function () {
@@ -4463,13 +4501,13 @@ if ($mysql) {
 
         var trackingRequests = [
             null,
-            'c_n=' + toEncodedAbsolutePath('img1-en.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img1-en.jpg'),
-            'c_n=img.jpg&c_p=img.jpg&c_t=http%3A%2F%2Fimg2.example.com',
-            'c_n=' + toEncodedAbsolutePath('img3-en.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img3-en.jpg') + '&c_t=http%3A%2F%2Fimg3.example.com',
-            'c_n=My%20content%204&c_p=My%20content%204&c_t=http%3A%2F%2Fimg4.example.com',
-            'c_n=My%20Ad%205&c_p=http%3A%2F%2Fimg5.example.com%2Fpath%2Fxyz.jpg&c_t=' + originEncoded + '%2Fanylink5',
-            'c_n=http%3A%2F%2Fwww.example.com%2Fpath%2Fxyz.jpg&c_p=http%3A%2F%2Fwww.example.com%2Fpath%2Fxyz.jpg&c_t=http%3A%2F%2Fimg6.example.com',
-            'c_n=My%20Ad%207&c_p=Unknown&c_t=http%3A%2F%2Fimg7.example.com'
+            'c_n=' + toEncodedAbsolutePath('img1-en.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img1-en.jpg') + '&ca=1',
+            'c_n=img.jpg&c_p=img.jpg&c_t=http%3A%2F%2Fimg2.example.com&ca=1',
+            'c_n=' + toEncodedAbsolutePath('img3-en.jpg') + '&c_p=' + toEncodedAbsoluteUrl('img3-en.jpg') + '&c_t=http%3A%2F%2Fimg3.example.com&ca=1',
+            'c_n=My%20content%204&c_p=My%20content%204&c_t=http%3A%2F%2Fimg4.example.com&ca=1',
+            'c_n=My%20Ad%205&c_p=http%3A%2F%2Fimg5.example.com%2Fpath%2Fxyz.jpg&c_t=' + originEncoded + '%2Fanylink5&ca=1',
+            'c_n=http%3A%2F%2Fwww.example.com%2Fpath%2Fxyz.jpg&c_p=http%3A%2F%2Fwww.example.com%2Fpath%2Fxyz.jpg&c_t=http%3A%2F%2Fimg6.example.com&ca=1',
+            'c_n=My%20Ad%207&c_p=Unknown&c_t=http%3A%2F%2Fimg7.example.com&ca=1'
         ];
 
         stop();
@@ -4518,8 +4556,8 @@ if ($mysql) {
                 secondRequest = 0;
             }
 
-            assertTrackingRequest(requests[firstRequest], 'c_n=MyName&c_p=Unknown');
-            assertTrackingRequest(requests[secondRequest], 'c_n=Any%3A%2F%2FName&c_p=AnyPiece%3F&c_t=http%3A%2F%2Fwww.example.com');
+            assertTrackingRequest(requests[firstRequest], 'c_n=MyName&c_p=Unknown&ca=1');
+            assertTrackingRequest(requests[secondRequest], 'c_n=Any%3A%2F%2FName&c_p=AnyPiece%3F&c_t=http%3A%2F%2Fwww.example.com&ca=1');
 
 
             // trackContentInteraction()
@@ -4536,8 +4574,8 @@ if ($mysql) {
                 secondRequest = 0;
             }
 
-            assertTrackingRequest(requests[firstRequest], 'c_i=Clicke&c_n=IntName&c_p=Unknown');
-            assertTrackingRequest(requests[secondRequest], 'c_i=Clicki&c_n=IntN%3A%2Fame&c_p=IntPiece%3F&c_t=http%3A%2F%2Fint.example.com');
+            assertTrackingRequest(requests[firstRequest], 'c_i=Clicke&c_n=IntName&c_p=Unknown&ca=1');
+            assertTrackingRequest(requests[secondRequest], 'c_i=Clicki&c_n=IntN%3A%2Fame&c_p=IntPiece%3F&c_t=http%3A%2F%2Fint.example.com&ca=1');
 
 
             // trackContentInteractionNode()
@@ -4547,7 +4585,7 @@ if ($mysql) {
             requests = results.match(/<span\>(.*?)\<\/span\>/g);
             requests.shift();
 
-            assertTrackingRequest(requests[0], 'c_i=Clicki%3Fiii&c_n=My%20Ad%205&c_p=http%3A%2F%2Fimg5.example.com%2Fpath%2Fxyz.jpg&c_t=' + originEncoded + '%2Fanylink5');
+            assertTrackingRequest(requests[0], 'c_i=Clicki%3Fiii&c_n=My%20Ad%205&c_p=http%3A%2F%2Fimg5.example.com%2Fpath%2Fxyz.jpg&c_t=' + originEncoded + '%2Fanylink5&ca=1');
 
 
             // enableTrackOnlyVisibleContent() && trackAllContentImpressions()
@@ -4794,7 +4832,7 @@ if ($mysql) {
 
             var requests = results.match(/<span\>(.*?)\<\/span\>/g);
             requests.shift();
-            assertTrackingRequest(requests[0], 'c_i=click&c_n=img.jpg&c_p=img.jpg&c_t=http%3A%2F%2Fimg2.example.com');
+            assertTrackingRequest(requests[0], 'c_i=click&c_n=img.jpg&c_p=img.jpg&c_t=http%3A%2F%2Fimg2.example.com&ca=1');
 
 
             results = fetchTrackedRequests(token2);
@@ -4803,7 +4841,7 @@ if ($mysql) {
             requests = results.match(/<span\>(.*?)\<\/span\>/g);
             requests.shift();
 
-            assertTrackingRequest(requests[0], 'link=http%3A%2F%2Fimg2.example.com%2F&c_i=click&c_n=img.jpg&c_p=img.jpg&c_t=http%3A%2F%2Fimg2.example.com');
+            assertTrackingRequest(requests[0], 'link=http%3A%2F%2Fimg2.example.com%2F&c_i=click&c_n=img.jpg&c_p=img.jpg&c_t=http%3A%2F%2Fimg2.example.com&ca=1');
 
 
             results = fetchTrackedRequests(token3);
@@ -4812,7 +4850,7 @@ if ($mysql) {
             requests = results.match(/<span\>(.*?)\<\/span\>/g);
             requests.shift();
 
-            assertTrackingRequest(requests[0], 'link=http%3A%2F%2Fimg2.example.com%2F&c_i=click&c_n=img.jpg&c_p=img.jpg&c_t=http%3A%2F%2Fimg2.example.com');
+            assertTrackingRequest(requests[0], 'link=http%3A%2F%2Fimg2.example.com%2F&c_i=click&c_n=img.jpg&c_p=img.jpg&c_t=http%3A%2F%2Fimg2.example.com&ca=1');
 
 
             results = fetchTrackedRequests(token4);
@@ -4870,7 +4908,7 @@ if ($mysql) {
         strictEqual(tracker.hasRememberedConsent(), true, "rememberConsentGiven, sets cookie to remember consent" );
         var rememberedConsent = tracker.getRememberedConsent();
         strictEqual(String(rememberedConsent).length, 13, "getRememberedConsent, returns the data in milliseconds eg '1522200406749'" );
-        strictEqual(String(rememberedConsent).substr(0, 2), '15', "getRememberedConsent, starts with correct data" );
+        strictEqual(String(rememberedConsent).substr(0, 2), '16', "getRememberedConsent, starts with correct data" );
 
         tracker.requireConsent();
         strictEqual(tracker.hasConsent(), true, "when requiring consent, and we remembered consent, consent should be given" );
@@ -5131,9 +5169,16 @@ function customAddEventListener(element, eventType, eventHandler, useCapture) {
  
 <?php
     include_once $root . '/core/Filesystem.php';
-    $files = \Piwik\Filesystem::globr($root . '/plugins/*/tests/javascript', 'index.php');
+    $files = \Piwik\Filesystem::globr($root . '/plugins/'.$testPluginPath.'/tests/javascript', 'index.php');
     foreach ($files as $file) {
         include_once $file;
+    }
+    if ($testPluginPath !== '*') {
+        // Travis would always include tag manager
+        $files = \Piwik\Filesystem::globr($root . '/plugins/TagManager/tests/javascript', 'index.php');
+        foreach ($files as $file) {
+            include_once $file;
+        }
     }
 ?>
 

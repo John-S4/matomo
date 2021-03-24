@@ -57,7 +57,7 @@ class UnprocessedSegmentsTest extends IntegrationTestCase
         Rules::setBrowserTriggerArchiving(false);
 
         $segments = Rules::getSegmentsToProcess([self::$fixture->idSite]);
-        self::assertTrue(!in_array(self::TEST_SEGMENT, $segments));
+        self::assertTrue(in_array(self::TEST_SEGMENT, $segments)); // auto archive is forced when browser archiving is fully disabled
 
         $this->runAnyApiTest('VisitsSummary.get', 'realTimeSegmentUnprocessed', [
             'idSite' => self::$fixture->idSite,
@@ -69,12 +69,12 @@ class UnprocessedSegmentsTest extends IntegrationTestCase
 
     public function test_apiOutput_whenUnprocessedAutoArchiveSegmentUsed_WithBrowserArchivingDisabled()
     {
+        Rules::setBrowserTriggerArchiving(false);
+
         $idSegment = API::getInstance()->add('testsegment', self::TEST_SEGMENT, self::$fixture->idSite, $autoArchive = true);
 
         $storedSegment = API::getInstance()->get($idSegment);
         $this->assertNotEmpty($storedSegment);
-
-        Rules::setBrowserTriggerArchiving(false);
 
         $segments = Rules::getSegmentsToProcess([self::$fixture->idSite]);
         self::assertTrue(in_array(self::TEST_SEGMENT, $segments));
@@ -89,12 +89,12 @@ class UnprocessedSegmentsTest extends IntegrationTestCase
 
     public function test_apiOutput_whenUnprocessedAutoArchiveSegmentUsed_WithBrowserArchivingDisabled_AndEncodedSegment()
     {
+        Rules::setBrowserTriggerArchiving(false);
+
         $idSegment = API::getInstance()->add('testsegment', self::TEST_SEGMENT, self::$fixture->idSite, $autoArchive = true);
 
         $storedSegment = API::getInstance()->get($idSegment);
         $this->assertNotEmpty($storedSegment);
-
-        Rules::setBrowserTriggerArchiving(false);
 
         $segments = Rules::getSegmentsToProcess([self::$fixture->idSite]);
         self::assertTrue(in_array(self::TEST_SEGMENT, $segments));
@@ -109,14 +109,16 @@ class UnprocessedSegmentsTest extends IntegrationTestCase
 
     public function test_apiOutput_whenPreprocessedSegmentUsed_WithBrowserArchivingDisabled()
     {
+        Rules::setBrowserTriggerArchiving(false);
+
         $idSegment = API::getInstance()->add('testsegment', self::TEST_SEGMENT, self::$fixture->idSite, $autoArchive = true);
 
         $storedSegment = API::getInstance()->get($idSegment);
         $this->assertNotEmpty($storedSegment);
 
+        Rules::setBrowserTriggerArchiving(true);
         VisitsSummary\API::getInstance()->get(self::$fixture->idSite, 'week',
-            Date::factory(self::$fixture->dateTime)->toString(), self::TEST_SEGMENT); // archive
-
+            Date::factory(self::$fixture->dateTime)->toString(), self::TEST_SEGMENT); // archive (make sure there's data for actual test)
         Rules::setBrowserTriggerArchiving(false);
 
         $segments = Rules::getSegmentsToProcess([self::$fixture->idSite]);
@@ -152,6 +154,8 @@ class UnprocessedSegmentsTest extends IntegrationTestCase
     {
         $this->clearLogData();
 
+        Rules::setBrowserTriggerArchiving(false);
+
         $idSegment = API::getInstance()->add('testsegment', self::TEST_SEGMENT, self::$fixture->idSite, $autoArchive = true);
 
         $storedSegment = API::getInstance()->get($idSegment);
@@ -159,8 +163,6 @@ class UnprocessedSegmentsTest extends IntegrationTestCase
 
         VisitsSummary\API::getInstance()->get(self::$fixture->idSite, 'week',
             Date::factory(self::$fixture->dateTime)->toString(), self::TEST_SEGMENT); // archive
-
-        Rules::setBrowserTriggerArchiving(false);
 
         $segments = Rules::getSegmentsToProcess([self::$fixture->idSite]);
         self::assertTrue(in_array(self::TEST_SEGMENT, $segments));
@@ -177,12 +179,12 @@ class UnprocessedSegmentsTest extends IntegrationTestCase
     {
         $this->clearLogData();
 
+        Rules::setBrowserTriggerArchiving(false);
+
         $idSegment = API::getInstance()->add('testsegment', self::TEST_SEGMENT, self::$fixture->idSite, $autoArchive = true);
 
         $storedSegment = API::getInstance()->get($idSegment);
         $this->assertNotEmpty($storedSegment);
-
-        Rules::setBrowserTriggerArchiving(false);
 
         $segments = Rules::getSegmentsToProcess([self::$fixture->idSite]);
         self::assertTrue(in_array(self::TEST_SEGMENT, $segments));
@@ -197,12 +199,12 @@ class UnprocessedSegmentsTest extends IntegrationTestCase
 
     public function test_apiOutput_whenMultipleSitesRequested_OneWithDataOneNot_AndBrowserArchivingDisabled()
     {
+        Rules::setBrowserTriggerArchiving(false);
+
         $idSegment = API::getInstance()->add('testsegment', self::TEST_SEGMENT, $idSite = false, $autoArchive = true);
 
         $storedSegment = API::getInstance()->get($idSegment);
         $this->assertNotEmpty($storedSegment);
-
-        Rules::setBrowserTriggerArchiving(false);
 
         $segments = Rules::getSegmentsToProcess([self::$fixture->idSite]);
         self::assertTrue(in_array(self::TEST_SEGMENT, $segments));
@@ -213,6 +215,29 @@ class UnprocessedSegmentsTest extends IntegrationTestCase
             'period' => 'week',
             'segment' => self::TEST_SEGMENT,
         ]);
+    }
+
+    public function test_add_realTimeEnabledInApi_whenRealTimeDisabledInConfig()
+    {
+        $this->expectExceptionMessage('Real time segments are disabled. You need to enable auto archiving.');
+        $this->expectException(\Exception::class);
+        $config = Config::getInstance();
+        $general = $config->General;
+        $general['enable_create_realtime_segments'] = 0;
+        $config->General = $general;
+
+        API::getInstance()->add('testsegment', self::TEST_SEGMENT, $idSite = false, $autoArchive = false);
+    }
+
+    public function test_add_realTimeEnabledInApi_whenRealTimeEnabledInConfigShouldWork()
+    {
+        $config = Config::getInstance();
+        $general = $config->General;
+        $general['enable_create_realtime_segments'] = 1;
+        $config->General = $general;
+
+        $id = API::getInstance()->add('testsegment', self::TEST_SEGMENT, $idSite = false, $autoArchive = false);
+        $this->assertNotEmpty($id);
     }
 
     public static function getOutputPrefix()

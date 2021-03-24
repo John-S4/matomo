@@ -7,7 +7,12 @@
  */
 namespace Piwik\Plugins\CoreConsole\tests\System;
 
-use Interop\Container\ContainerInterface;
+use Piwik\CronArchive;
+use Piwik\Http;
+use Piwik\Plugins\SegmentEditor\API;
+use Piwik\Site;
+use Piwik\Tests\Framework\TestingEnvironmentVariables;
+use Psr\Container\ContainerInterface;
 use Piwik\Archive\ArchiveInvalidator;
 use Piwik\Common;
 use Piwik\Config;
@@ -35,6 +40,11 @@ use Psr\Log\LoggerInterface;
  */
 class ArchiveCronTest extends SystemTestCase
 {
+    const NEW_SEGMENT = 'operatingSystemCode==IOS';
+    const NEW_SEGMENT_NAME = 'segmentForToday';
+    const ENCODED_SEGMENT = 'pageUrl=@%252F';
+    const ENCODED_SEGMENT_NAME = 'segmentWithEncoding';
+
     /**
      * @var ManySitesImportedLogs
      */
@@ -45,6 +55,56 @@ class ArchiveCronTest extends SystemTestCase
         parent::setUpBeforeClass();
 
         Db::exec("UPDATE " . Common::prefixTable('site') . ' SET ts_created = \'2005-01-02 00:00:00\'');
+        Site::clearCache();
+    }
+
+    private static function addNewSegmentToPast()
+    {
+        Config::getInstance()->General['enable_browser_archiving_triggering'] = 0;
+        self::$fixture->getTestEnvironment()->overrideConfig('General', 'enable_browser_archiving_triggering', 0);
+        self::$fixture->getTestEnvironment()->save();
+
+        // add one segment and set it's created/updated time to some time in the past so we don't re-archive for it
+        $idSegment = API::getInstance()->add(self::NEW_SEGMENT_NAME, self::NEW_SEGMENT, self::$fixture->idSite, $autoArchive = 1, $enabledAllUsers = 1);
+
+        // add another segment w/ special encoded value (but do it through the API which will use a definition query param which is not
+        // encoded the same as Request::getRawSegmentFromRequest()
+        $url = Fixture::getTestRootUrl() . '?' . http_build_query([
+            'module' => 'API',
+            'method' => 'SegmentEditor.add',
+            'name' => self::ENCODED_SEGMENT_NAME,
+            'definition' => self::ENCODED_SEGMENT,
+            'idSite' => self::$fixture->idSite,
+            'autoArchive' => 1,
+            'enabledAllUsers' => 1,
+            'format' => 'json',
+            'token_auth' => Fixture::getTokenAuth(),
+        ]);
+        self::assertStringContainsString(urlencode(self::ENCODED_SEGMENT), $url);
+
+        $idSegment2 = Http::sendHttpRequest($url, 10);
+        $idSegment2 = json_decode($idSegment2, $isAssoc = true);
+        $idSegment2 = $idSegment2['value'];
+
+        Config::getInstance()->General['enable_browser_archiving_triggering'] = 1;
+        self::$fixture->getTestEnvironment()->overrideConfig('General', 'enable_browser_archiving_triggering', 1);
+        self::$fixture->getTestEnvironment()->save();
+
+        Db::exec("UPDATE " . Common::prefixTable('segment') . ' SET ts_created = \'2015-01-02 00:00:00\', ts_last_edit = \'2015-01-02 00:00:00\' WHERE idsegment IN (' . $idSegment . ", " . $idSegment2 . ")");
+    }
+
+    private static function trackVisitsForToday()
+    {
+        $startTime = Date::today()->addHour(12)->getDatetime();
+
+        $t = Fixture::getTracker(self::$fixture->idSite, $startTime);
+        $t->setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 12_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148');
+        $t->setUrl('http://awebsite.com/here/we/go');
+        Fixture::checkResponse($t->doTrackPageView('a page title'));
+
+        $t->setUrl('http://awebsite.com/another/page');
+        $t->setForceVisitDateTime(Date::factory($startTime)->addHour(1));
+        Fixture::checkResponse($t->doTrackPageView('a second page title'));
     }
 
     public function getApiForTesting()
@@ -60,6 +120,18 @@ class ArchiveCronTest extends SystemTestCase
                                                           'segment'    => $info['definition'],
                                                           'testSuffix' => '_' . $segmentName));
         }
+
+        $results[] = array('VisitsSummary.get', array('idSite' => 'all',
+                                                      'date' => 'today',
+                                                      'periods' => ['day', 'week', 'month', 'year'],
+                                                      'segment' => self::NEW_SEGMENT,
+                                                      'testSuffix' => '_' . self::NEW_SEGMENT_NAME));
+
+        $results[] = array('VisitsSummary.get', array('idSite' => 'all',
+            'date' => 'today',
+            'periods' => ['day', 'week', 'month', 'year'],
+            'segment' => self::ENCODED_SEGMENT,
+            'testSuffix' => '_' . self::ENCODED_SEGMENT_NAME));
 
         // ExamplePlugin metric
         $results[] = ['ExamplePlugin.getExampleArchivedMetric', [
@@ -115,25 +187,41 @@ class ArchiveCronTest extends SystemTestCase
 
     public function testArchivePhpCron()
     {
+        self::$fixture->getTestEnvironment()->overrideConfig('General', 'enable_browser_archiving_triggering', 0);
+        self::$fixture->getTestEnvironment()->overrideConfig('General', 'browser_archiving_disabled_enforce', 1);
+        self::$fixture->getTestEnvironment()->save();
+
+        Config::getInstance()->General['enable_browser_archiving_triggering'] = 0;
+        Config::getInstance()->General['browser_archiving_disabled_enforce'] = 1;
+
         // invalidate exampleplugin only archives in past
         $invalidator = StaticContainer::get(ArchiveInvalidator::class);
-        $invalidator->markArchivesAsInvalidated([1], ['2007-04-05'], 'day', new Segment('', [1]), false, false, 'ExamplePlugin');
+        $invalidator->markArchivesAsInvalidated(
+            [1], ['2007-04-05'], 'day', new Segment('', [1]), false, false, 'ExamplePlugin');
 
         // track a visit in 2007-04-05 so it will archive (don't want to force archiving because then this test will take another 15 mins)
         $tracker = Fixture::getTracker(1, '2007-04-05');
         $tracker->setUrl('http://example.com/test/url');
         Fixture::checkResponse($tracker->doTrackPageView('abcdefg'));
 
+        $invalidationEntries = $this->getInvalidatedArchiveTableEntries();
+        $this->assertGreaterThan(0, count($invalidationEntries));
+
         // empty the list so nothing is invalidated during core:archive (so we only archive ExamplePlugin and not all plugins)
         $invalidator->forgetRememberedArchivedReportsToInvalidate(1, Date::factory('2007-04-05'));
 
-        $output = $this->runArchivePhpCron();
+        $this->runArchivePhpCron();
 
-        $expectedInvalidations = [];
-        $invalidationEntries = $this->getInvalidatedArchiveTableEntries();
-        $this->assertEquals($expectedInvalidations, $invalidationEntries);
-
-        $this->compareArchivePhpOutputAgainstExpected($output);
+        // add new segment w/ edited created/edit time so it will not trigger segment re-archiving, then track a visit
+        // so the segments will be archived w/ other invalidation. this also runs core:archive forcing CURL requests.
+        try {
+            self::forceCurlCliMulti();
+            self::addNewSegmentToPast();
+            self::trackVisitsForToday();
+            $output = $this->runArchivePhpCron();
+        } finally {
+            self::undoForceCurlCliMulti();
+        }
 
         foreach ($this->getApiForTesting() as $testInfo) {
 
@@ -158,19 +246,29 @@ class ArchiveCronTest extends SystemTestCase
      */
     public function testArchivePhpCronWithSingleReportRearchive()
     {
+        self::$fixture->getTestEnvironment()->overrideConfig('General', 'enable_browser_archiving_triggering', 0);
+        self::$fixture->getTestEnvironment()->overrideConfig('General', 'browser_archiving_disabled_enforce', 1);
+        self::$fixture->getTestEnvironment()->save();
+
+        Config::getInstance()->General['enable_browser_archiving_triggering'] = 0;
+        Config::getInstance()->General['browser_archiving_disabled_enforce'] = 1;
+
+        $table = ArchiveTableCreator::getNumericTable(Date::factory('2007-04-05'));
+
+        // three whole plugin archives from previous tests
+        $countOfDoneExamplePluginArchives = Db::fetchOne("SELECT COUNT(*) FROM `$table` WHERE name = 'done.ExamplePlugin'");
+        $this->assertEquals(3, $countOfDoneExamplePluginArchives);
+
         // invalidate a report so we get a partial archive (using the metric that gets incremented each time it is archived)
         // (do it after the last run so we don't end up just re-using the ExamplePlugin archive)
         $invalidator = StaticContainer::get(ArchiveInvalidator::class);
         $invalidator->markArchivesAsInvalidated([1], ['2007-04-05'], 'day', new Segment('', [1]), false, false, 'ExamplePlugin.ExamplePlugin_example_metric2');
 
-        $sequence = new Sequence('ExamplePlugin_archiveCount');
-        $beforeCount = $sequence->getCurrentId();
+        $output = $this->runArchivePhpCron();
 
-        $output = $this->runArchivePhpCron(['-vvv' => null]);
-
-        $afterCount = $sequence->getCurrentId();
-
-        $this->assertNotEquals($beforeCount, $afterCount, 'example plugin archiving was not triggered');
+        Option::delete(CronArchive::OPTION_ARCHIVING_FINISHED_TS); // clear so segment re-archive logic runs on this run
+        Option::delete(CronArchive::CRON_INVALIDATION_TIME_OPTION_NAME);
+        $output = $this->runArchivePhpCron(); // have to run twice since we manually invalidate above
 
         $this->runApiTests('ExamplePlugin.getExampleArchivedMetric', [
             'idSite' => 'all',
@@ -179,12 +277,15 @@ class ArchiveCronTest extends SystemTestCase
             'testSuffix' => '_singleMetric',
         ]);
 
+        // three new partial plugin archives should appear
+        $countOfDoneExamplePluginArchives = Db::fetchOne("SELECT COUNT(*) FROM `$table` WHERE name = 'done.ExamplePlugin'");
+        $this->assertEquals(6, $countOfDoneExamplePluginArchives);
+
         // test that latest archives for ExamplePlugin are partial
-        $archiveValues = Db::fetchAll("SELECT value FROM " . ArchiveTableCreator::getNumericTable(Date::factory('2007-04-05'))
-            . " WHERE `name` = 'done.ExamplePlugin' ORDER BY ts_archived DESC LIMIT 8");
+        $archiveValues = Db::fetchAll("SELECT value FROM $table WHERE `name` = 'done.ExamplePlugin' ORDER BY ts_archived DESC LIMIT 8");
         $archiveValues = array_column($archiveValues, 'value');
         $archiveValues = array_unique($archiveValues);
-        $this->assertEquals([5], $archiveValues);
+        $this->assertEquals([5, 1], array_values($archiveValues));
     }
 
     public function testArchivePhpCronArchivesFullRanges()
@@ -252,24 +353,6 @@ class ArchiveCronTest extends SystemTestCase
         return $output;
     }
 
-    private function compareArchivePhpOutputAgainstExpected($output)
-    {
-        $fileName = 'test_ArchiveCronTest_archive_php_cron_output.txt';
-        list($pathProcessed, $pathExpected) = static::getProcessedAndExpectedDirs();
-
-        $expectedOutputFile = $pathExpected . $fileName;
-        $processedFile = $pathProcessed . $fileName;
-
-        file_put_contents($processedFile, $output);
-
-        try {
-            $this->assertTrue(is_readable($expectedOutputFile));
-            $this->assertEquals(file_get_contents($expectedOutputFile), $output);
-        } catch (Exception $ex) {
-            $this->comparisonFailures[] = $ex;
-        }
-    }
-
     public static function provideContainerConfigBeforeClass()
     {
         return array(
@@ -293,6 +376,20 @@ class ArchiveCronTest extends SystemTestCase
     private function getInvalidatedArchiveTableEntries()
     {
         return Db::fetchAll("SELECT idinvalidation, idarchive, idsite, date1, date2, period, name, status FROM " . Common::prefixTable('archive_invalidations'));
+    }
+
+    private static function undoForceCurlCliMulti()
+    {
+        $testVars = new TestingEnvironmentVariables();
+        $testVars->forceCliMultiViaCurl = 0;
+        $testVars->save();
+    }
+
+    private static function forceCurlCliMulti()
+    {
+        $testVars = new TestingEnvironmentVariables();
+        $testVars->forceCliMultiViaCurl = 1;
+        $testVars->save();
     }
 }
 

@@ -8,6 +8,7 @@
 
 namespace Piwik\Tests\Integration\Plugin;
 
+use Piwik\Config;
 use Piwik\Container\StaticContainer;
 use Piwik\Db;
 use Piwik\Http\ControllerResolver;
@@ -78,13 +79,39 @@ class ManagerTest extends IntegrationTestCase
         $this->assertEquals(array(), $this->manager->getLoadedPlugins());
     }
 
-    public function test_deactivatePlugin()
+    public function test_activateDeactivatePlugin()
     {
+        $plugin = new Plugin('ExampleTheme');
+
+        $this->assertNull($plugin->getPluginLastActivationTime());
+        $this->assertNull($plugin->getPluginLastDeactivationTime());
+
         $this->assertFalse($this->manager->isPluginActivated('ExampleTheme'));
         $this->manager->activatePlugin('ExampleTheme');
+
+        $lastActivationTime = $plugin->getPluginLastActivationTime();
+        $this->assertNotNull($lastActivationTime);
+
+        $this->assertNull($plugin->getPluginLastDeactivationTime());
+
         $this->assertTrue($this->manager->isPluginActivated('ExampleTheme'));
         $this->manager->deactivatePlugin('ExampleTheme');
         $this->assertFalse($this->manager->isPluginActivated('ExampleTheme'));
+
+        $lastDeactivationTime = $plugin->getPluginLastDeactivationTime();
+        $this->assertNotNull($lastDeactivationTime);
+
+        sleep(1);
+
+        $this->manager->activatePlugin('ExampleTheme');
+
+        $nextLastActivationTime = $plugin->getPluginLastActivationTime();
+        $this->assertGreaterThan($lastActivationTime->getTimestamp(), $nextLastActivationTime->getTimestamp());
+
+        $this->manager->deactivatePlugin('ExampleTheme');
+
+        $nextLastDeactivationTime = $plugin->getPluginLastDeactivationTime();
+        $this->assertGreaterThan($lastDeactivationTime->getTimestamp(), $nextLastDeactivationTime->getTimestamp());
     }
 
     /** @see Issue https://github.com/piwik/piwik/issues/8422 */
@@ -108,6 +135,25 @@ class ManagerTest extends IntegrationTestCase
                 }
             }
         }
+    }
+
+    public function test_isPluginInstalled_corePluginThatExists()
+    {
+        $this->assertTrue($this->manager->isPluginInstalled('CoreAdminHome', true));
+        $this->assertTrue($this->manager->isPluginInstalled('CoreAdminHome', false));
+    }
+
+    public function test_isPluginInstalled_pluginNotExists()
+    {
+        $this->assertFalse($this->manager->isPluginInstalled('FooBarBaz', true));
+        $this->assertFalse($this->manager->isPluginInstalled('FooBarBaz', false));
+    }
+
+    public function test_isPluginInstalled_pluginInstalledConfigButNotExists()
+    {
+        Config::getInstance()->PluginsInstalled['PluginsInstalled'][] = 'FooBarBaz';
+        $this->assertFalse($this->manager->isPluginInstalled('FooBarBaz', true));
+        $this->assertTrue($this->manager->isPluginInstalled('FooBarBaz', false));
     }
 
     /**

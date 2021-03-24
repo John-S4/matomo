@@ -6,7 +6,7 @@
         "ColumnActionURL": "活動網址",
         "ColumnClicks": "點擊數",
         "ColumnClicksDocumentation": "此連結被點擊的次數。",
-        "ColumnDownloadURL": "下載連結（URL）",
+        "ColumnDownloadURL": "下載網址",
         "ColumnDownloadURLs": "下載網址",
         "ColumnEntryPageTitle": "到達網頁標題",
         "ColumnEntryPageURL": "到達網頁網址",
@@ -23,7 +23,7 @@
         "ColumnSearches": "搜尋數",
         "ColumnSearchesDocumentation": "訪客在你網站搜尋引擎所搜尋的關鍵字次數。",
         "ColumnSearchExits": "%% 搜尋離站數",
-        "ColumnSearchExitsDocumentation": "訪客在你網站搜尋引擎搜尋後即離開網站的百分比。",
+        "ColumnSearchExitsDocumentation": "訪客在你的網站的搜尋引擎搜尋此關鍵字後即離開網站的百分比。",
         "ColumnSearchResultsCount": "搜尋結果筆數",
         "ColumnSiteSearchKeywords": "不重複關鍵字數",
         "ColumnUniqueClicks": "不重複點擊數",
@@ -32,6 +32,7 @@
         "ColumnUniqueOutlinks": "不重複離開連結數",
         "ColumnIdPageview": "瀏覽數 ID",
         "ColumnInteractionPosition": "互動位置",
+        "ColumnPageViewPosition": "瀏覽數位置",
         "ActionsInVisit": "訪問中的活動數",
         "DownloadsReportDocumentation": "在這份報表你可以查看訪客已下載了哪個檔案。%sMatomo 是透過點擊下載連結來計算下載數，但不知道下載完成與否。",
         "EntryPagesReportDocumentation": "此報表包含指定期間內之到達網頁的相關資訊。所謂的到達網頁，是訪客進入網站時所訪問的第一個網頁。%s 到達網頁的網址以資料夾結構顯示。",
@@ -64,7 +65,7 @@
         "SubmenuPagesEntry": "到達網頁",
         "SubmenuPagesExit": "離站網頁",
         "SubmenuPageTitles": "網頁標題",
-        "SubmenuSitesearch": "搜尋網站",
+        "SubmenuSitesearch": "站內搜尋",
         "WidgetEntryPageTitles": "到達網頁標題",
         "WidgetExitPageTitles": "離站網頁標題",
         "WidgetPagesEntry": "到達網頁",
@@ -77,6 +78,7 @@
         "WidgetSearchNoResultKeywords": "查無資料的關鍵字",
         "ActionType": "活動類型",
         "ActionTypes": "活動類型",
-        "Behaviour": "行為"
+        "Behaviour": "行為",
+        "PagesSubcategoryHelp3": "使用左邊的 +、- 圖示來導航。"
     }
 }

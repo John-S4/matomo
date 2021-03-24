@@ -13,33 +13,15 @@ use Piwik\Columns\MetricsList;
 use Piwik\Piwik;
 use Piwik\Plugin\ArchivedMetric;
 use Piwik\Plugin\ComputedMetric;
-use Piwik\Plugin\Dimension\ActionDimension;
-use Piwik\Tracker\Action;
-use Piwik\Tracker\ActionPageview;
-use Piwik\Tracker\Request;
-use Piwik\Tracker\Visitor;
 
-class TimeServer extends ActionDimension
+class TimeServer extends Base
 {
-    protected $columnName = 'time_server';
-    protected $columnType = 'MEDIUMINT(10) UNSIGNED NULL';
-    protected $type = self::TYPE_DURATION_MS;
+    const COLUMN_TYPE = 'MEDIUMINT(10) UNSIGNED NULL';
+    const COLUMN_NAME = 'time_server';
+
+    protected $columnName = self::COLUMN_NAME;
+    protected $columnType = self::COLUMN_TYPE;
     protected $nameSingular = 'PagePerformance_ColumnTimeServer';
-
-    public function onNewAction(Request $request, Visitor $visitor, Action $action)
-    {
-        if (!($action instanceof ActionPageview)) {
-            return false;
-        }
-
-        $serverTime = $request->getParam($this->getRequestParam());
-
-        if ($serverTime === -1) {
-            return false;
-        }
-
-        return $serverTime;
-    }
 
     public function getRequestParam()
     {
@@ -58,7 +40,8 @@ class TimeServer extends ActionDimension
 
         $metric3 = $dimensionMetricFactory->createMetric('sum(if(%s is null, 0, 1))');
         $metric3->setName('pageviews_with_time_server');
-        $metric3->setTranslatedName(Piwik::translate('PagePerformance_ColumnViewsWithServerTime'));
+        $metric3->setType(self::TYPE_NUMBER);
+        $metric3->setTranslatedName(Piwik::translate('PagePerformance_ColumnViewsWithTimeServer'));
         $metricsList->addMetric($metric3);
 
         $metric4 = $dimensionMetricFactory->createMetric(ArchivedMetric::AGGREGATION_MIN);
@@ -67,8 +50,8 @@ class TimeServer extends ActionDimension
 
         $metric = $dimensionMetricFactory->createComputedMetric($metric1->getName(), $metric3->getName(), ComputedMetric::AGGREGATION_AVG);
         $metric->setName('avg_time_server');
-        $metric->setTranslatedName(Piwik::translate('PagePerformance_ColumnAverageServerTime'));
-        $metric->setDocumentation(Piwik::translate('PagePerformance_ColumnAverageServerTimeDocumentation'));
+        $metric->setTranslatedName(Piwik::translate('PagePerformance_ColumnAverageTimeServer'));
+        $metric->setDocumentation(Piwik::translate('PagePerformance_ColumnAverageTimeServerDocumentation'));
         $metricsList->addMetric($metric);
     }
 }

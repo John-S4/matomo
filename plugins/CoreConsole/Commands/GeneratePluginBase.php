@@ -18,9 +18,16 @@ use Piwik\Plugin\Manager;
 use Piwik\Version;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
+use Piwik\SettingsPiwik;
+use Piwik\Exception\NotGitInstalledException;
 
 abstract class GeneratePluginBase extends ConsoleCommand
 {
+    protected function initialize(InputInterface $input, OutputInterface $output)
+    {
+        $this->throwErrorIfNotGitInstalled();
+    }
+
     public function isEnabled()
     {
         return Development::isEnabled();
@@ -136,9 +143,13 @@ abstract class GeneratePluginBase extends ConsoleCommand
 
         $newRequiredVersion = sprintf('>=%s,<%d.0.0-b1', $piwikVersion, $nextMajorVersion);
 
-
         if (!empty($pluginJson['require']['piwik'])) {
-            $requiredVersion = trim($pluginJson['require']['piwik']);
+            $pluginJson['require']['matomo'] = $pluginJson['require']['piwik'];
+            unset($pluginJson['require']['piwik']);
+        }
+
+        if (!empty($pluginJson['require']['matomo'])) {
+            $requiredVersion = trim($pluginJson['require']['matomo']);
 
             if ($requiredVersion === $newRequiredVersion) {
                 // there is nothing to updated
@@ -194,7 +205,7 @@ abstract class GeneratePluginBase extends ConsoleCommand
             $output->writeln(sprintf('<comment>We have updated your "%s" to require the Piwik version "%s".</comment>', $relativePluginJson, $newRequiredVersion));
         }
 
-        $pluginJson['require']['piwik'] = $newRequiredVersion;
+        $pluginJson['require']['matomo'] = $newRequiredVersion;
         file_put_contents($pluginJsonPath, $this->toJson($pluginJson));
     }
 
@@ -393,4 +404,11 @@ abstract class GeneratePluginBase extends ConsoleCommand
         return $contentToReplace;
     }
 
+    protected function throwErrorIfNotGitInstalled()
+    {
+        if (!SettingsPiwik::isGitDeployment()) {
+            $url = 'https://developer.matomo.org/guides/getting-started-part-1';
+            throw new NotGitInstalledException("This development feature requires Matomo to be checked out from git. For more information please visit {$url}.");
+        }
+    }
 }

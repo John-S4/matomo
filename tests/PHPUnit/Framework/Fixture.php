@@ -83,6 +83,10 @@ class Fixture extends \PHPUnit\Framework\Assert
     const ADMIN_USER_PASSWORD = 'superUserPass';
     const ADMIN_USER_TOKEN = 'c4ca4238a0b923820dcc509a6f75849b';
 
+    const VIEW_USER_LOGIN = 'viewUserLogin';
+    const VIEW_USER_PASSWORD = 'viewUserPass';
+    const VIEW_USER_TOKEN = 'a4ca4238a0b923820dcc509a6f75849f';
+
     const PERSIST_FIXTURE_DATA_ENV = 'PERSIST_FIXTURE_DATA';
 
     public $dbName = false;
@@ -320,6 +324,9 @@ class Fixture extends \PHPUnit\Framework\Assert
 
         PiwikCache::getTransientCache()->flushAll();
 
+        // In some cases the Factory might be filled with settings that contain an invalid database connection
+        StaticContainer::getContainer()->set('Piwik\Settings\Storage\Factory', new \Piwik\Settings\Storage\Factory());
+
         if ($this->overwriteExisting
             || !$this->isFixtureSetUp()
         ) {
@@ -374,17 +381,18 @@ class Fixture extends \PHPUnit\Framework\Assert
             $this->dropDatabase();
         }
 
-        $this->clearInMemoryCaches();
+        self::clearInMemoryCaches();
 
         Log::unsetInstance();
 
         $this->destroyEnvironment();
     }
 
-    public function clearInMemoryCaches()
+    public static function clearInMemoryCaches($resetTranslations = true)
     {
         Date::$now = null;
         FrontController::$requestId = null;
+        Cache::$cache = null;
         Archive::clearStaticCache();
         DataTableManager::getInstance()->deleteAll();
         Option::clearCache();
@@ -401,7 +409,9 @@ class Fixture extends \PHPUnit\Framework\Assert
 
         Plugin\API::unsetAllInstances();
         $_GET = $_REQUEST = array();
-        self::resetTranslations();
+        if ($resetTranslations) {
+            self::resetTranslations();
+        }
 
         self::getConfig()->Plugins; // make sure Plugins exists in a config object for next tests that use Plugin\Manager
         // since Plugin\Manager uses getFromGlobalConfig which doesn't init the config object

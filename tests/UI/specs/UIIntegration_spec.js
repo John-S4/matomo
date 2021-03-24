@@ -139,8 +139,18 @@ describe("UIIntegrationTest", function () { // TODO: Rename to Piwik?
             expect(await modal.screenshot()).to.matchImage('shortcuts');
         });
 
+        it('should show category help correctly', async function () {
+            await page.goto('about:blank');
+            await page.goto("?" + urlBase + "#?" + generalParams + "&category=General_Visitors&subcategory=General_Overview");
+            await page.waitFor('.dataTable');
+            await (await page.jQuery('#secondNavBar ul ul li[role=menuitem]:contains(Overview):eq(0)')).hover();
+            await (await page.jQuery('#secondNavBar ul ul li[role=menuitem]:contains(Overview):eq(0) .item-help-icon')).click();
+            expect(await page.screenshotSelector('#secondNavBar,#notificationContainer')).to.matchImage('category_help');
+        });
+
         // one page w/ segment
         it('should load the visitors > overview page correctly when a segment is specified', async function () {
+            await page.goto('about:blank');
             testEnvironment.overrideConfig('General', {
                 enable_segments_cache: 0
             });
@@ -396,6 +406,23 @@ describe("UIIntegrationTest", function () { // TODO: Rename to Piwik?
 
             pageWrap = await page.$('.pageWrap');
             expect(await pageWrap.screenshot()).to.matchImage('actions_outlinks');
+        });
+
+        it('should load the segmented vlog correctly for outlink containing a &', async function () {
+            await (await page.jQuery('#widgetActionsgetOutlinks .value:contains("outlinks.org")')).click();
+            await page.waitForNetworkIdle();
+
+            const row = 'tr:contains("&pk") ';
+            const first = await page.jQuery(row + 'td.column:first');
+            await first.hover();
+            const second = await page.jQuery(row + 'td.label .actionSegmentVisitorLog');
+            await second.hover();
+            await second.click();
+            await page.waitForNetworkIdle();
+            await page.mouse.move(0, 0);
+
+            pageWrap = await page.$('.ui-dialog');
+            expect(await pageWrap.screenshot()).to.matchImage('actions_outlinks_vlog');
         });
 
         it('should load the actions > downloads page correctly', async function () {
@@ -731,6 +758,12 @@ describe("UIIntegrationTest", function () { // TODO: Rename to Piwik?
     describe("AdminPages", function () {
         this.title = parentSuite.title; // to make sure the screenshot prefix is the same
 
+        it('should not be possible to render any action using token_auth with at least some admin access', async function () {
+            await page.goto("?" + generalParams + "&module=CoreAdminHome&action=home&token_auth=c4ca4238a0b923820dcc509a6f75849b");
+
+            expect(await page.screenshot({ fullPage: true })).to.matchImage('admin_home_admintoken_not_allowed');
+        });
+
         it('should load the Admin home page correct', async function () {
             await page.goto("?" + generalParams + "&module=CoreAdminHome&action=home");
 
@@ -880,7 +913,7 @@ describe("UIIntegrationTest", function () { // TODO: Rename to Piwik?
         it('should load the widgets listing page correctly', async function () {
             await page.goto("?" + generalParams + "&module=Widgetize&action=index");
 
-            visitors = await page.jQuery('.widgetpreview-categorylist>li:contains(Visitors - Overview):first');
+            visitors = await page.jQuery('.widgetpreview-categorylist>li:contains(Visitors):first');
             await visitors.hover();
             await visitors.click();
             await page.waitFor(100);
@@ -1088,7 +1121,7 @@ describe("UIIntegrationTest", function () { // TODO: Rename to Piwik?
         });
 
         it('should allow embedding the entire app', async function () {
-            var url = "tests/resources/embed-file.html#" + encodeURIComponent(page.baseUrl + 'index.php?' + urlBase + '&token_auth=' + testEnvironment.tokenAuth);
+            var url = "tests/resources/embed-file.html#" + encodeURIComponent(page.baseUrl + 'index.php?' + urlBase + '&token_auth=a4ca4238a0b923820dcc509a6f75849f');
             await page.goto(url);
             await page.waitForNetworkIdle();
 
